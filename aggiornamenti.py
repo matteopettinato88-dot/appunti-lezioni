@@ -1,8 +1,8 @@
 """
-Appunti Lezioni – aggiornamenti dalle release di GitHub.
+Appunti Lezioni – aggiornamenti dal repository GitHub.
 
 Come funziona:
-  1. controlla() legge l'ultima release del repository (API pubblica di GitHub, senza password).
+  1. controlla() legge versione.json dal repository GitHub (pubblico, senza password).
   2. installa() scarica la nuova versione in una cartella temporanea e la VERIFICA prima di toccare
      nulla: compila tutti i file e prova a importare i moduli con il Python del programma.
   3. Solo se la verifica passa: copia di sicurezza della versione attuale in _versione_precedente,
@@ -43,21 +43,23 @@ def _get(url, timeout=20):
         return r.read()
 
 
-def controlla(repo):
+def controlla(repo, ramo="main"):
     """
-    Restituisce None se non ci sono novità, altrimenti un dict
+    Legge versione.json dal repository GitHub. Restituisce None se non ci sono novità, altrimenti
     {versione, note, url_zip, pagina}. Solleva eccezioni in caso di problemi di rete.
     """
     if not repo:
         raise RuntimeError("Aggiornamenti non ancora configurati.")
-    dati = json.loads(_get(f"https://api.github.com/repos/{repo}/releases/latest"))
-    versione = dati.get("tag_name", "").lstrip("vV")
+    dati = json.loads(_get(f"https://raw.githubusercontent.com/{repo}/{ramo}/versione.json"))
+    versione = str(dati.get("versione", "")).lstrip("vV")
     if versione_tupla(versione) <= versione_tupla(core.APP_VERSIONE):
         return None
-    url = next((a["browser_download_url"] for a in dati.get("assets", [])
-                if a.get("name", "").lower().endswith(".zip")), dati.get("zipball_url"))
-    return {"versione": versione, "note": (dati.get("body") or "").strip(), "url_zip": url,
-            "pagina": dati.get("html_url", "")}
+    note = dati.get("note", "")
+    if isinstance(note, list):
+        note = "\n".join(f"- {n}" for n in note)
+    return {"versione": versione, "note": note.strip(),
+            "url_zip": f"https://github.com/{repo}/archive/refs/heads/{ramo}.zip",
+            "pagina": f"https://github.com/{repo}"}
 
 
 def _file_programma(cartella):
