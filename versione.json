@@ -1,10 +1,8 @@
 {
-  "versione": "3.1.0",
+  "versione": "3.2.0",
   "note": [
-    "Nuova lezione con corso, titolo e materiali (PDF, PowerPoint, Word, foto)",
-    "Materiali aggiunti anche durante la registrazione, con il minuto annotato",
-    "Dispensa del corso a capitoli, con glossario e rimandi tra lezioni",
-    "Appunti completi anche per le lezioni molto lunghe",
-    "Aggiornamenti automatici con verifica e possibilità di tornare indietro"
+    "Nuova grafica: schede più chiare, pulsanti con la giusta importanza e colori con un solo significato",
+    "Durante la registrazione: timer grande, «Termina e crea appunti» e «Pausa» ben distinti",
+    "Impostazioni divise in sezioni, con «Salva impostazioni» sempre visibile"
   ]
 }

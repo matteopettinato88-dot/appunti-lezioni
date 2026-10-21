@@ -20,7 +20,7 @@ import numpy as np
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
 APP_NOME = "Appunti Lezioni"
-APP_VERSIONE = "3.1.0"
+APP_VERSIONE = "3.2.0"
 APP_DIR = Path(__file__).resolve().parent
 
 

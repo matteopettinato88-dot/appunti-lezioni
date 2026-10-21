@@ -9,6 +9,7 @@ Appunti Lezioni – l'applicazione con interfaccia.
 """
 
 import datetime as dt
+import json
 import queue
 import sys
 import threading
@@ -22,8 +23,8 @@ import materiali
 from core import log
 
 COLORI = {
-    "caricamento": "#8a8f98", "pronto": "#2f6fdf", "registra": "#d93636",
-    "pausa": "#e0a412", "elabora": "#ec7a08", "errore": "#6b6f76",
+    "caricamento": "#8a8f98", "pronto": "#2553E6", "registra": "#D92D20",
+    "pausa": "#F79009", "elabora": "#ec7a08", "errore": "#6b6f76",
 }
 TESTI_STATO = {
     "caricamento": "Preparazione…", "pronto": "Pronto", "registra": "Sto registrando",
@@ -32,13 +33,144 @@ TESTI_STATO = {
 QUALITA_ETICHETTE = {"veloce": "Veloce", "standard": "Standard", "preciso": "Preciso"}
 STOP_OPZIONI = {"Mai": 0, "5 minuti": 5, "8 minuti": 8, "15 minuti": 15, "30 minuti": 30}
 EXTRA_OPZIONI = {"Aggiungili, segnati «(dai materiali)»": "segna", "Ignorali": "ignora"}
-GRIGIO = "#5f6670"
+GRIGIO = "#475467"
+
+# ---- Palette del nuovo design: un colore = un significato
+# rosso = registrare · blu = selezionato/attivo/azione · scuro = chiudere la lezione · grigi = struttura
+C = {
+    "sfondo": "#F5F6F8", "card": "#FFFFFF", "bordo": "#E4E7EC", "bordo_input": "#D0D5DD",
+    "linea": "#EAECF0", "chip": "#F2F4F7", "binario": "#E7EAEF",
+    "testo": "#101828", "grigio": GRIGIO,
+    "accento": "#2553E6", "accento_hover": "#1A3FB8",
+    "rosso": "#D92D20", "rosso_hover": "#B42318",
+    "scuro": "#101828", "scuro_hover": "#344054",
+    "ok": "#067647", "errore": "#B42318",
+}
+CARD = dict(fg_color="#FFFFFF", border_width=1, border_color="#E4E7EC", corner_radius=16)
+SECONDARIO = dict(fg_color="#FFFFFF", hover_color="#F2F4F7", text_color="#101828",
+                  border_width=1, border_color="#D0D5DD")
+FANTASMA = dict(fg_color="transparent", hover_color="#F2F4F7", text_color="#344054")
+PERICOLO = dict(fg_color="transparent", hover_color="#FEF3F2", text_color="#B42318")
+LINK = dict(fg_color="transparent", hover_color="#EEF4FF", text_color="#2553E6")
+CHIP = {   # (sfondo, testo) del badge di stato
+    "caricamento": ("#F2F4F7", "#475467"), "pronto": ("#ECFDF3", "#067647"),
+    "registra": ("#FEF3F2", "#B42318"), "pausa": ("#FFFAEB", "#B54708"),
+    "elabora": ("#FFF6ED", "#C4320A"), "errore": ("#F2F4F7", "#344054"),
+}
+TITOLI_STATO = {
+    "caricamento": "Preparo la trascrizione…", "pronto": "Pronto a registrare la lezione",
+    "registra": "", "pausa": "", "elabora": "Sto creando gli appunti", "errore": "Qualcosa non va",
+}
 TIPI_FILE = [("Materiali", "*.pdf *.pptx *.docx *.txt *.md *.jpg *.jpeg *.png *.webp"),
              ("PDF", "*.pdf"), ("PowerPoint", "*.pptx"), ("Word", "*.docx"),
              ("Foto", "*.jpg *.jpeg *.png *.webp"), ("Tutti i file", "*.*")]
 
 
-def crea_icona(path, colore="#2f6fdf"):
+# Tema customtkinter del nuovo design (scritto in DATI/tema.json all'avvio)
+TEMA = {'CTk': {'fg_color': ['#F5F6F8', '#F5F6F8']},
+ 'CTkToplevel': {'fg_color': ['#F5F6F8', '#F5F6F8']},
+ 'CTkFrame': {'corner_radius': 12,
+              'border_width': 0,
+              'fg_color': ['#FFFFFF', '#FFFFFF'],
+              'top_fg_color': ['#FFFFFF', '#FFFFFF'],
+              'border_color': ['#E4E7EC', '#E4E7EC']},
+ 'CTkButton': {'corner_radius': 10,
+               'border_width': 0,
+               'fg_color': ['#2553E6', '#2553E6'],
+               'hover_color': ['#1A3FB8', '#1A3FB8'],
+               'border_color': ['#D0D5DD', '#D0D5DD'],
+               'text_color': ['#FFFFFF', '#FFFFFF'],
+               'text_color_disabled': ['#98A2B3', '#98A2B3']},
+ 'CTkLabel': {'corner_radius': 0, 'fg_color': 'transparent', 'text_color': ['#101828', '#101828']},
+ 'CTkEntry': {'corner_radius': 10,
+              'border_width': 1,
+              'fg_color': ['#FFFFFF', '#FFFFFF'],
+              'border_color': ['#D0D5DD', '#D0D5DD'],
+              'text_color': ['#101828', '#101828'],
+              'placeholder_text_color': ['#667085', '#667085']},
+ 'CTkCheckBox': {'corner_radius': 6,
+                 'border_width': 2,
+                 'fg_color': ['#2553E6', '#2553E6'],
+                 'border_color': ['#D0D5DD', '#D0D5DD'],
+                 'hover_color': ['#1A3FB8', '#1A3FB8'],
+                 'checkmark_color': ['#FFFFFF', '#FFFFFF'],
+                 'text_color': ['#101828', '#101828'],
+                 'text_color_disabled': ['#98A2B3', '#98A2B3']},
+ 'CTkSwitch': {'corner_radius': 1000,
+               'border_width': 3,
+               'button_length': 0,
+               'fg_color': ['#D0D5DD', '#D0D5DD'],
+               'progress_color': ['#2553E6', '#2553E6'],
+               'button_color': ['#FFFFFF', '#FFFFFF'],
+               'button_hover_color': ['#FFFFFF', '#FFFFFF'],
+               'text_color': ['#101828', '#101828'],
+               'text_color_disabled': ['#98A2B3', '#98A2B3']},
+ 'CTkRadioButton': {'corner_radius': 1000,
+                    'border_width_checked': 6,
+                    'border_width_unchecked': 2,
+                    'fg_color': ['#2553E6', '#2553E6'],
+                    'border_color': ['#D0D5DD', '#D0D5DD'],
+                    'hover_color': ['#1A3FB8', '#1A3FB8'],
+                    'text_color': ['#101828', '#101828'],
+                    'text_color_disabled': ['#98A2B3', '#98A2B3']},
+ 'CTkProgressBar': {'corner_radius': 1000,
+                    'border_width': 0,
+                    'fg_color': ['#EAECF0', '#EAECF0'],
+                    'progress_color': ['#2553E6', '#2553E6'],
+                    'border_color': ['#EAECF0', '#EAECF0']},
+ 'CTkSlider': {'corner_radius': 1000,
+               'button_corner_radius': 1000,
+               'border_width': 6,
+               'button_length': 0,
+               'fg_color': ['#EAECF0', '#EAECF0'],
+               'progress_color': ['#2553E6', '#2553E6'],
+               'button_color': ['#2553E6', '#2553E6'],
+               'button_hover_color': ['#1A3FB8', '#1A3FB8']},
+ 'CTkOptionMenu': {'corner_radius': 10,
+                   'fg_color': ['#F2F4F7', '#F2F4F7'],
+                   'button_color': ['#E4E7EC', '#E4E7EC'],
+                   'button_hover_color': ['#D0D5DD', '#D0D5DD'],
+                   'text_color': ['#101828', '#101828'],
+                   'text_color_disabled': ['#98A2B3', '#98A2B3']},
+ 'CTkComboBox': {'corner_radius': 10,
+                 'border_width': 1,
+                 'fg_color': ['#FFFFFF', '#FFFFFF'],
+                 'border_color': ['#D0D5DD', '#D0D5DD'],
+                 'button_color': ['#D0D5DD', '#D0D5DD'],
+                 'button_hover_color': ['#98A2B3', '#98A2B3'],
+                 'text_color': ['#101828', '#101828'],
+                 'text_color_disabled': ['#98A2B3', '#98A2B3']},
+ 'CTkScrollbar': {'corner_radius': 1000,
+                  'border_spacing': 4,
+                  'fg_color': 'transparent',
+                  'button_color': ['#D0D5DD', '#D0D5DD'],
+                  'button_hover_color': ['#98A2B3', '#98A2B3']},
+ 'CTkSegmentedButton': {'corner_radius': 10,
+                        'border_width': 3,
+                        'fg_color': ['#E7EAEF', '#E7EAEF'],
+                        'selected_color': ['#FFFFFF', '#FFFFFF'],
+                        'selected_hover_color': ['#FFFFFF', '#FFFFFF'],
+                        'unselected_color': ['#E7EAEF', '#E7EAEF'],
+                        'unselected_hover_color': ['#DDE1E7', '#DDE1E7'],
+                        'text_color': ['#101828', '#101828'],
+                        'text_color_disabled': ['#98A2B3', '#98A2B3']},
+ 'CTkTextbox': {'corner_radius': 10,
+                'border_width': 0,
+                'fg_color': ['#FFFFFF', '#FFFFFF'],
+                'border_color': ['#D0D5DD', '#D0D5DD'],
+                'text_color': ['#101828', '#101828'],
+                'scrollbar_button_color': ['#D0D5DD', '#D0D5DD'],
+                'scrollbar_button_hover_color': ['#98A2B3', '#98A2B3']},
+ 'CTkScrollableFrame': {'label_fg_color': ['#F2F4F7', '#F2F4F7']},
+ 'DropdownMenu': {'fg_color': ['#FFFFFF', '#FFFFFF'],
+                  'hover_color': ['#F2F4F7', '#F2F4F7'],
+                  'text_color': ['#101828', '#101828']},
+ 'CTkFont': {'macOS': {'family': 'SF Display', 'size': 14, 'weight': 'normal'},
+             'Windows': {'family': 'Segoe UI', 'size': 14, 'weight': 'normal'},
+             'Linux': {'family': 'DejaVu Sans', 'size': 13, 'weight': 'normal'}}}
+
+
+def crea_icona(path, colore="#2553E6"):
     from PIL import Image, ImageDraw
 
     img = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
@@ -47,7 +179,7 @@ def crea_icona(path, colore="#2f6fdf"):
     d.rounded_rectangle((64, 52, 192, 204), radius=14, fill="white")
     for y in (92, 120, 148, 176):
         d.rectangle((86, y, 170, y + 8), fill=colore)
-    d.ellipse((150, 150, 214, 214), fill="#d93636", outline="white", width=8)
+    d.ellipse((150, 150, 214, 214), fill="#D92D20", outline="white", width=8)
     img.save(path, sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
     return img
 
@@ -75,6 +207,67 @@ def imposta_icona(finestra, ico):
         finestra.iconbitmap(str(ico))
     except Exception:
         pass
+
+
+def F(size=14, weight="normal"):
+    import customtkinter as ctk
+    return ctk.CTkFont(size=size, weight=weight)
+
+
+class Schede:
+    """Barra di schede a tutta larghezza. Sostituisce CTkTabview con la stessa interfaccia (add/set/get)."""
+
+    def __init__(self, master):
+        import customtkinter as ctk
+        self.ctk = ctk
+        self.frame = ctk.CTkFrame(master, fg_color="transparent", corner_radius=0)
+        self.frame.grid_columnconfigure(0, weight=1)
+        self.frame.grid_rowconfigure(1, weight=1)
+        self.nav = ctk.CTkFrame(self.frame, fg_color=C["binario"], corner_radius=12)
+        self.nav.grid(row=0, column=0, sticky="ew", pady=(0, 16))
+        self.corpo = ctk.CTkFrame(self.frame, fg_color="transparent", corner_radius=0)
+        self.corpo.grid(row=1, column=0, sticky="nsew")
+        self.corpo.grid_columnconfigure(0, weight=1)
+        self.corpo.grid_rowconfigure(0, weight=1)
+        self.pagine, self.bottoni, self.attiva = {}, {}, None
+
+    def pack(self, **kw):
+        self.frame.pack(**kw)
+
+    def add(self, nome):
+        ctk = self.ctk
+        i = len(self.pagine)
+        self.nav.grid_columnconfigure(i, weight=1, uniform="schede")
+        b = ctk.CTkButton(self.nav, text=nome, height=40, corner_radius=9, command=lambda: self.set(nome))
+        b.grid(row=0, column=i, sticky="ew", padx=3, pady=4)
+        pagina = ctk.CTkFrame(self.corpo, fg_color="transparent", corner_radius=0)
+        pagina.grid(row=0, column=0, sticky="nsew")
+        pagina.grid_remove()
+        self.pagine[nome], self.bottoni[nome] = pagina, b
+        if self.attiva is None:
+            self.set(nome)
+        else:
+            self._stile(nome, False)
+        return pagina
+
+    def _stile(self, nome, attiva):
+        self.bottoni[nome].configure(
+            fg_color=C["card"] if attiva else C["binario"],
+            hover_color=C["card"] if attiva else "#DDE1E7",
+            text_color=C["testo"] if attiva else C["grigio"],
+            font=F(14, "bold" if attiva else "normal"))
+
+    def set(self, nome):
+        for n, p in self.pagine.items():
+            if n == nome:
+                p.grid()
+            else:
+                p.grid_remove()
+            self._stile(n, n == nome)
+        self.attiva = nome
+
+    def get(self):
+        return self.attiva
 
 
 def tempo_fa(ts):
@@ -133,7 +326,7 @@ class FinestraLezione:
             ctk.CTkLabel(w, text="Materiali (facoltativi)", font=bold).grid(row=4, column=0, sticky="w", padx=20, pady=(14, 0))
             ctk.CTkLabel(w, text="Slide, dispense, appunti tuoi o foto. Potrai aggiungerne altri anche durante la lezione.",
                          text_color=GRIGIO, wraplength=470, justify="left").grid(row=5, column=0, sticky="w", padx=20)
-            self.zona = ctk.CTkFrame(w, height=150, border_width=2, border_color="#b8c4d6", fg_color="#f4f7fb",
+            self.zona = ctk.CTkFrame(w, height=150, border_width=2, border_color="#D0D5DD", fg_color="#F9FAFB",
                                      corner_radius=10)
             self.zona.grid(row=6, column=0, sticky="ew", padx=20, pady=(6, 0))
             self.zona.grid_columnconfigure(0, weight=1)
@@ -144,11 +337,11 @@ class FinestraLezione:
 
         b = ctk.CTkFrame(w, fg_color="transparent")
         b.grid(row=riga, column=0, sticky="e", padx=20, pady=18)
-        ctk.CTkButton(b, text="Annulla", width=100, fg_color="#8a8f98", hover_color="#6f747c",
+        ctk.CTkButton(b, text="Annulla", width=100, **SECONDARIO,
                       command=w.destroy).grid(row=0, column=0, padx=6)
         ctk.CTkButton(b, text="Salva" if modifica else "●  Inizia a registrare", width=190,
-                      fg_color="#2f6fdf" if modifica else "#d93636",
-                      hover_color="#2459b8" if modifica else "#b52b2b", font=bold,
+                      fg_color="#2553E6" if modifica else "#D92D20",
+                      hover_color="#1A3FB8" if modifica else "#B42318", font=bold,
                       command=self._conferma).grid(row=0, column=1)
         w.bind("<Return>", lambda e: self._conferma())
         w.bind("<Escape>", lambda e: w.destroy())
@@ -170,11 +363,11 @@ class FinestraLezione:
             ctk.CTkLabel(self.zona, text=f"{materiali.icona(p)}  {p.name}", anchor="w"
                          ).grid(row=r, column=0, sticky="w", padx=12, pady=(8 if r == 0 else 2, 0))
             ctk.CTkButton(self.zona, text="✕", width=28, height=24, fg_color="transparent", text_color=GRIGIO,
-                          hover_color="#e1e6ee", command=lambda x=p: self._togli(x)
+                          hover_color="#F2F4F7", command=lambda x=p: self._togli(x)
                           ).grid(row=r, column=1, padx=8, pady=(8 if r == 0 else 2, 0))
             r += 1
         if self.suggerimento and self.suggerimento not in self.file:
-            s = ctk.CTkFrame(self.zona, fg_color="#e3edfb", corner_radius=8)
+            s = ctk.CTkFrame(self.zona, fg_color="#EEF4FF", corner_radius=8)
             s.grid(row=r, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 0))
             s.grid_columnconfigure(0, weight=1)
             ctk.CTkLabel(s, anchor="w", justify="left", wraplength=330,
@@ -255,7 +448,7 @@ class FinestraDispensa:
         self.cmb.grid(row=0, column=0, sticky="ew")
         self.cmb.set(corso)
 
-        self.card = ctk.CTkFrame(w, fg_color="#ffffff", border_width=1, border_color="#d5d8dc", corner_radius=12)
+        self.card = ctk.CTkFrame(w, **CARD)
         self.card.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 8))
         self.card.grid_columnconfigure(0, weight=1)
 
@@ -308,7 +501,7 @@ class FinestraDispensa:
         if disp and disp.exists():
             ctk.CTkButton(self.card, text="Apri", width=70, command=lambda: self.app.sistema.apri(disp)
                           ).grid(row=0, column=1, rowspan=2, padx=4)
-            ctk.CTkButton(self.card, text="PDF", width=60, fg_color="#8a8f98", hover_color="#6f747c",
+            ctk.CTkButton(self.card, text="PDF", width=60, **SECONDARIO,
                           command=self._pdf).grid(row=0, column=2, rowspan=2, padx=(4, 14))
 
         if not lez:
@@ -323,7 +516,7 @@ class FinestraDispensa:
         corrente = self.app.lezione_corrente and self.app.lezione_corrente["id"] == l["id"]
         aperta = l["id"] in self.aperte
         f = ctk.CTkFrame(self.lista, fg_color="#ffffff", border_width=1,
-                         border_color="#d93636" if corrente else "#d5d8dc", corner_radius=10)
+                         border_color="#D92D20" if corrente else "#E4E7EC", corner_radius=10)
         f.grid(row=riga, column=0, sticky="ew", padx=4, pady=4)
         f.grid_columnconfigure(0, weight=1)
 
@@ -335,11 +528,11 @@ class FinestraDispensa:
             stato = "da completare"
         nmat = len(l.get("materiali", []))
         testo = f"{'▼' if aperta else '▶'}  {corsi.titolo_capitolo(l)}"
-        ctk.CTkButton(f, text=testo, anchor="w", fg_color="transparent", text_color="#1d2127", hover_color="#f0f2f5",
+        ctk.CTkButton(f, text=testo, anchor="w", fg_color="transparent", text_color="#101828", hover_color="#F2F4F7",
                       font=ctk.CTkFont(weight="bold"), command=lambda: self._apri_chiudi(l["id"])
                       ).grid(row=0, column=0, sticky="ew", padx=4, pady=4)
         ctk.CTkLabel(f, text=stato + (f"   📎{nmat}" if nmat else ""),
-                     text_color="#d93636" if corrente else (GRIGIO if l["stato"] == "completa" else "#c06a00")
+                     text_color="#D92D20" if corrente else (GRIGIO if l["stato"] == "completa" else "#B54708")
                      ).grid(row=0, column=1, padx=12)
         if not aperta:
             return
@@ -359,7 +552,7 @@ class FinestraDispensa:
             ctk.CTkButton(corpo, text="Apri", width=56, height=26, command=lambda x=p: self.app.sistema.apri(x)
                           ).grid(row=r, column=1, padx=4, pady=2)
             ctk.CTkButton(corpo, text="✕", width=28, height=26, fg_color="transparent", text_color=GRIGIO,
-                          hover_color="#e1e6ee", command=lambda x=m: self._rimuovi(corso, l, x)
+                          hover_color="#F2F4F7", command=lambda x=m: self._rimuovi(corso, l, x)
                           ).grid(row=r, column=2, pady=2)
             r += 1
 
@@ -369,20 +562,20 @@ class FinestraDispensa:
         b_agg.configure(command=lambda: self.app.menu_aggiungi(b_agg, corso, l["id"]))
         b_agg.grid(row=0, column=0, padx=(0, 6))
         if l.get("appunti") and (corsi.cartella(cfg, corso) / l["appunti"]).exists():
-            ctk.CTkButton(bot, text="📝 Apri appunti", width=120, height=30, fg_color="#8a8f98", hover_color="#6f747c",
+            ctk.CTkButton(bot, text="📝 Apri appunti", width=120, height=30, **SECONDARIO,
                           command=lambda: self.app.sistema.apri(corsi.cartella(cfg, corso) / l["appunti"])
                           ).grid(row=0, column=1, padx=6)
         if not corrente and l.get("trascrizione") and (l["stato"] != "completa" or l.get("materiali_modificati")):
             etichetta = "Rigenera appunti" if l["stato"] == "completa" else "Crea appunti"
-            ctk.CTkButton(bot, text=etichetta, width=130, height=30, fg_color="#ec7a08", hover_color="#c96706",
+            ctk.CTkButton(bot, text=etichetta, width=130, height=30,
                           command=lambda: self.app.crea_appunti_di(corso, l["id"])).grid(row=0, column=2, padx=6)
         if not corrente and l["stato"] != "completa":
-            ctk.CTkButton(bot, text="Elimina", width=80, height=30, fg_color="transparent", text_color="#c0392b",
-                          hover_color="#f8e1df", command=lambda: self.app.elimina_lezione(corso, l)
+            ctk.CTkButton(bot, text="Elimina", width=80, height=30, fg_color="transparent", text_color="#B42318",
+                          hover_color="#FEF3F2", command=lambda: self.app.elimina_lezione(corso, l)
                           ).grid(row=0, column=3, padx=6)
         if l.get("materiali_modificati") and l["stato"] == "completa":
             ctk.CTkLabel(corpo, text="Hai cambiato i materiali: rigenera gli appunti per tenerne conto.",
-                         text_color="#c06a00").grid(row=r + 1, column=0, columnspan=3, sticky="w", pady=(6, 0))
+                         text_color="#B54708").grid(row=r + 1, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
     def _apri_chiudi(self, lid):
         self.aperte.symmetric_difference_update({lid})
@@ -422,7 +615,13 @@ class App:
         self.ctk = ctk
         self.sistema = sistema
         ctk.set_appearance_mode("light")
-        ctk.set_default_color_theme("blue")
+        try:
+            tema = core.DATI / "tema.json"
+            tema.write_text(json.dumps(TEMA), encoding="utf-8")
+            ctk.set_default_color_theme(str(tema))
+        except Exception:
+            log(traceback.format_exc())
+            ctk.set_default_color_theme("blue")
 
         self.cfg = core.load_config()
         self.ui_q = queue.Queue()
@@ -462,16 +661,16 @@ class App:
         except Exception as e:
             log(f"Trascinamento file non disponibile: {e}")
         self.root.title(core.APP_NOME)
-        self.root.geometry("620x760")
-        self.root.minsize(540, 620)
+        self.root.geometry("680x880")
+        self.root.minsize(580, 700)
         try:
             self.root.iconbitmap(str(self.ico))
         except Exception:
             pass
         self.root.protocol("WM_DELETE_WINDOW", self.nascondi)
 
-        self.tabs = ctk.CTkTabview(self.root, anchor="nw")
-        self.tabs.pack(fill="both", expand=True, padx=12, pady=(4, 12))
+        self.tabs = Schede(self.root)
+        self.tabs.pack(fill="both", expand=True, padx=20, pady=(16, 20))
         self._scheda_lezione(self.tabs.add("Lezione"))
         self._scheda_appunti(self.tabs.add("Appunti"))
         self._scheda_impostazioni(self.tabs.add("Impostazioni"))
@@ -488,7 +687,7 @@ class App:
         if not self.cfg.get("chiave_api_anthropic"):
             self.tabs.set("Impostazioni")
             self.lbl_verifica.configure(text="Inserisci la chiave API per poter creare gli appunti.",
-                                        text_color="#c0392b")
+                                        text_color="#B42318")
         elif corsi.lezioni_da_completare(self.cfg):
             self.tabs.set("Appunti")
         if nascosto:
@@ -517,67 +716,102 @@ class App:
         ctk = self.ctk
         tab.grid_columnconfigure(0, weight=1)
 
-        card = ctk.CTkFrame(tab, corner_radius=12, fg_color="#ffffff", border_width=1, border_color="#d5d8dc")
-        card.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 10))
-        card.grid_columnconfigure(1, weight=1)
-        self.lbl_pallino = ctk.CTkLabel(card, text="●", font=ctk.CTkFont(size=34))
-        self.lbl_pallino.grid(row=0, column=0, rowspan=2, padx=(16, 8), pady=12)
-        self.lbl_stato = ctk.CTkLabel(card, text="", font=ctk.CTkFont(size=20, weight="bold"), anchor="w")
-        self.lbl_stato.grid(row=0, column=1, sticky="w", pady=(12, 0))
-        self.lbl_dettaglio = ctk.CTkLabel(card, text="", anchor="w", text_color=GRIGIO, justify="left", wraplength=380)
-        self.lbl_dettaglio.grid(row=1, column=1, sticky="w", pady=(0, 12))
-        self.lbl_timer = ctk.CTkLabel(card, text="", font=ctk.CTkFont(size=24, weight="bold"))
-        self.lbl_timer.grid(row=0, column=2, padx=(16, 4))
-        self.btn_modifica = ctk.CTkButton(card, text="✏️", width=34, height=28, fg_color="transparent",
-                                          hover_color="#eef1f5", text_color="#1d2127", command=self.modifica_lezione)
-        self.barra_livello = ctk.CTkProgressBar(card, height=8, progress_color="#d93636")
-        self.barra_livello.grid(row=2, column=0, columnspan=4, sticky="ew", padx=16, pady=(0, 14))
+        # --- riquadro principale: stato, timer, livello audio e pulsanti
+        card = ctk.CTkFrame(tab, **CARD)
+        card.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        card.grid_columnconfigure(0, weight=1)
+
+        testa = ctk.CTkFrame(card, fg_color="transparent")
+        testa.grid(row=0, column=0, sticky="ew", padx=24, pady=(20, 0))
+        testa.grid_columnconfigure(1, weight=1)
+        self.chip_stato = ctk.CTkFrame(testa, corner_radius=13, fg_color=C["chip"])
+        self.chip_stato.grid(row=0, column=0, sticky="w")
+        self.lbl_pallino = ctk.CTkLabel(self.chip_stato, text="●", font=F(11), width=12, height=26)
+        self.lbl_pallino.grid(row=0, column=0, padx=(10, 4))
+        self.lbl_stato = ctk.CTkLabel(self.chip_stato, text="", font=F(12, "bold"), height=26)
+        self.lbl_stato.grid(row=0, column=1, padx=(0, 12))
+        self.btn_modifica = ctk.CTkButton(testa, text="Modifica corso e titolo", width=10, height=32, font=F(13),
+                                          command=self.modifica_lezione, **LINK)
+
+        self.lbl_titolo = ctk.CTkLabel(card, text="", font=F(22, "bold"), anchor="w", justify="left")
+        self.lbl_titolo.grid(row=1, column=0, sticky="w", padx=24, pady=(14, 0))
+        self.lbl_timer = ctk.CTkLabel(card, text="", font=F(44, "bold"), anchor="w")
+        self.lbl_dettaglio = ctk.CTkLabel(card, text="", anchor="w", text_color=GRIGIO, justify="left",
+                                          wraplength=540)
+        self.lbl_dettaglio.grid(row=2, column=0, sticky="w", padx=24, pady=(2, 0))
+        self.barra_livello = ctk.CTkProgressBar(card, height=6, progress_color=C["accento"], fg_color=C["linea"])
         self.barra_livello.set(0)
 
-        b = ctk.CTkFrame(tab, fg_color="transparent")
-        b.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 8))
+        b = ctk.CTkFrame(card, fg_color="transparent")
+        b.grid(row=4, column=0, sticky="ew", padx=24, pady=(18, 24))
         b.grid_columnconfigure((0, 1, 2), weight=1)
-        self.btn_avvia = ctk.CTkButton(b, text="●  Nuova lezione", height=46,
-                                       font=ctk.CTkFont(size=15, weight="bold"),
-                                       fg_color="#d93636", hover_color="#b52b2b", command=self.avvia)
-        self.btn_pausa = ctk.CTkButton(b, text="❚❚  Pausa", height=40, command=self.pausa,
-                                       fg_color="#e0a412", hover_color="#c18c0c")
-        self.btn_ferma = ctk.CTkButton(b, text="■  Ferma e crea appunti", height=40, command=self.ferma,
-                                       fg_color="#2f6fdf", hover_color="#2459b8")
+        self.btn_avvia = ctk.CTkButton(b, text="●   Inizia nuova lezione", height=56, corner_radius=12,
+                                       font=F(16, "bold"), fg_color=C["rosso"], hover_color=C["rosso_hover"],
+                                       text_color_disabled="#FFFFFF", command=self.avvia)
+        self.btn_ferma = ctk.CTkButton(b, text="■   Termina e crea appunti", height=52, corner_radius=12,
+                                       font=F(15, "bold"), fg_color=C["scuro"], hover_color=C["scuro_hover"],
+                                       command=self.ferma)
+        self.btn_pausa = ctk.CTkButton(b, text="❚❚  Pausa", height=52, corner_radius=12, font=F(15, "bold"),
+                                       command=self.pausa, **SECONDARIO)
 
-        self.banner = ctk.CTkFrame(tab, fg_color="#fdebd0", corner_radius=10)
+        # --- avviso di stop automatico
+        self.banner = ctk.CTkFrame(tab, fg_color="#FFFAEB", border_width=1, border_color="#FEDF89",
+                                   corner_radius=12)
         self.banner.grid_columnconfigure(0, weight=1)
-        self.lbl_banner = ctk.CTkLabel(self.banner, text="", text_color="#7a4a00", anchor="w", justify="left")
-        self.lbl_banner.grid(row=0, column=0, sticky="w", padx=12, pady=10)
-        ctk.CTkButton(self.banner, text="Continua a registrare", width=170, command=self._rinvia_stop,
-                      fg_color="#ec7a08", hover_color="#c96706").grid(row=0, column=1, padx=10)
+        self.lbl_banner = ctk.CTkLabel(self.banner, text="", text_color="#93370D", anchor="w", justify="left")
+        self.lbl_banner.grid(row=0, column=0, sticky="w", padx=16, pady=12)
+        ctk.CTkButton(self.banner, text="Continua a registrare", width=180, height=40, font=F(14, "bold"),
+                      command=self._rinvia_stop, fg_color="#DC6803", hover_color="#B54708"
+                      ).grid(row=0, column=1, padx=12)
 
-        self.banner_agg = ctk.CTkFrame(tab, fg_color="#e3edfb", corner_radius=10)
+        # --- avviso di aggiornamento
+        self.banner_agg = ctk.CTkFrame(tab, fg_color="#EEF4FF", border_width=1, border_color="#C7D7FE",
+                                       corner_radius=12)
         self.banner_agg.grid_columnconfigure(0, weight=1)
-        self.lbl_agg = ctk.CTkLabel(self.banner_agg, text="", text_color="#1d3f7a", anchor="w", justify="left",
-                                    wraplength=330)
-        self.lbl_agg.grid(row=0, column=0, rowspan=2, sticky="w", padx=12, pady=10)
-        ctk.CTkButton(self.banner_agg, text="Aggiorna ora", width=120, command=self.aggiorna_programma
-                      ).grid(row=0, column=1, padx=10, pady=(10, 2))
-        ctk.CTkButton(self.banner_agg, text="Più tardi", width=120, fg_color="transparent", text_color="#1d3f7a",
-                      hover_color="#d3e1f6", command=lambda: self._mostra_agg(None)
-                      ).grid(row=1, column=1, padx=10, pady=(2, 10))
+        self.lbl_agg = ctk.CTkLabel(self.banner_agg, text="", text_color="#1A3FB8", anchor="w", justify="left",
+                                    wraplength=360)
+        self.lbl_agg.grid(row=0, column=0, rowspan=2, sticky="w", padx=16, pady=12)
+        ctk.CTkButton(self.banner_agg, text="Aggiorna ora", width=130, height=38, font=F(14, "bold"),
+                      command=self.aggiorna_programma).grid(row=0, column=1, padx=12, pady=(12, 2))
+        ctk.CTkButton(self.banner_agg, text="Più tardi", width=130, height=34, fg_color="transparent",
+                      text_color="#1A3FB8", hover_color="#E0EAFF", command=lambda: self._mostra_agg(None)
+                      ).grid(row=1, column=1, padx=12, pady=(2, 12))
         self.info_agg = None
 
-        # materiali della lezione in corso
-        self.frm_mat = ctk.CTkFrame(tab, corner_radius=12, fg_color="#ffffff", border_width=1, border_color="#d5d8dc")
+        # --- materiali della lezione in corso
+        self.frm_mat = ctk.CTkFrame(tab, **CARD)
         self.frm_mat.grid_columnconfigure(0, weight=1)
 
-        self.btn_dispensa = ctk.CTkButton(tab, text="📘  Visualizza dispensa", height=34, fg_color="#e9eef6",
-                                          text_color="#1d3f7a", hover_color="#dbe4f2", command=self.apri_dispensa)
-        self.btn_dispensa.grid(row=4, column=0, sticky="ew", padx=4, pady=(0, 8))
+        # --- dispensa
+        disp = ctk.CTkFrame(tab, **CARD)
+        disp.grid(row=4, column=0, sticky="ew", pady=(0, 12))
+        disp.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(disp, text="Dispensa del corso", font=F(15, "bold"), anchor="w"
+                     ).grid(row=0, column=0, sticky="w", padx=20, pady=(16, 0))
+        ctk.CTkLabel(disp, text="Capitoli, glossario e materiali di ogni lezione.", text_color=GRIGIO,
+                     font=F(13), anchor="w").grid(row=1, column=0, sticky="w", padx=20, pady=(0, 16))
+        self.btn_dispensa = ctk.CTkButton(disp, text="Visualizza dispensa", width=170, height=40,
+                                          font=F(14, "bold"), command=self.apri_dispensa, **SECONDARIO)
+        self.btn_dispensa.grid(row=0, column=1, rowspan=2, padx=20)
 
-        ctk.CTkLabel(tab, text="Ultime frasi trascritte", font=ctk.CTkFont(weight="bold")
-                     ).grid(row=5, column=0, sticky="w", padx=4, pady=(4, 2))
-        self.txt_live = ctk.CTkTextbox(tab, wrap="word", height=160)
-        self.txt_live.grid(row=6, column=0, sticky="nsew", padx=4, pady=(0, 4))
-        tab.grid_rowconfigure(6, weight=1)
-        self._scrivi_live("Premi «Nuova lezione»: qui compariranno le frasi man mano che vengono trascritte.", reset=True)
+        # --- trascrizione in diretta
+        live = ctk.CTkFrame(tab, **CARD)
+        live.grid(row=5, column=0, sticky="nsew")
+        live.grid_columnconfigure(0, weight=1)
+        live.grid_rowconfigure(2, weight=1)
+        ctk.CTkLabel(live, text="Trascrizione in diretta", font=F(15, "bold"), anchor="w"
+                     ).grid(row=0, column=0, sticky="w", padx=20, pady=(14, 12))
+        self.chip_live = ctk.CTkLabel(live, text="In attesa", font=F(12, "bold"), height=26, width=96,
+                                      corner_radius=13, fg_color=C["chip"], text_color=GRIGIO)
+        self.chip_live.grid(row=0, column=1, padx=20)
+        ctk.CTkFrame(live, height=1, corner_radius=0, fg_color=C["linea"]
+                     ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=1)
+        self.txt_live = ctk.CTkTextbox(live, wrap="word", height=160, fg_color=C["card"], font=F(14),
+                                       border_spacing=8)
+        self.txt_live.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=8, pady=(4, 10))
+        tab.grid_rowconfigure(5, weight=1)
+        self._scrivi_live("Premi «Inizia nuova lezione»: qui compariranno le frasi man mano che vengono "
+                          "trascritte.", reset=True)
 
     def _disegna_materiali(self):
         ctk = self.ctk
@@ -587,31 +821,31 @@ class App:
         if not cur:
             self.frm_mat.grid_remove()
             return
-        self.frm_mat.grid(row=3, column=0, sticky="ew", padx=4, pady=(0, 8))
+        self.frm_mat.grid(row=3, column=0, sticky="ew", pady=(0, 12))
         l = corsi.lezione(self.cfg, cur["corso"], cur["id"]) or {"materiali": []}
-        ctk.CTkLabel(self.frm_mat, text="Materiali di questa lezione", font=ctk.CTkFont(weight="bold"), anchor="w"
-                     ).grid(row=0, column=0, sticky="w", padx=14, pady=(10, 4))
-        b = ctk.CTkButton(self.frm_mat, text="+ Aggiungi", width=100, height=28)
+        ctk.CTkLabel(self.frm_mat, text="Materiali di questa lezione", font=F(15, "bold"), anchor="w"
+                     ).grid(row=0, column=0, sticky="w", padx=20, pady=(14, 6))
+        b = ctk.CTkButton(self.frm_mat, text="+ Aggiungi", width=110, height=34, **SECONDARIO)
         b.configure(command=lambda: self.menu_aggiungi(b, cur["corso"], cur["id"]))
-        b.grid(row=0, column=1, columnspan=2, padx=12, pady=(10, 4), sticky="e")
+        b.grid(row=0, column=1, columnspan=2, padx=16, pady=(14, 6), sticky="e")
         r = 1
         for m in l["materiali"]:
             quando = f"aggiunto al min {m['minuto']}" if m.get("minuto") is not None else ""
             ctk.CTkLabel(self.frm_mat, text=f"{materiali.icona(m['nome'])}  {m['nome']}", anchor="w"
-                         ).grid(row=r, column=0, sticky="w", padx=14)
-            ctk.CTkLabel(self.frm_mat, text=quando, text_color=GRIGIO).grid(row=r, column=1, padx=6)
-            ctk.CTkButton(self.frm_mat, text="✕", width=28, height=24, fg_color="transparent", text_color=GRIGIO,
-                          hover_color="#eef1f5",
+                         ).grid(row=r, column=0, sticky="w", padx=20)
+            ctk.CTkLabel(self.frm_mat, text=quando, text_color=GRIGIO, font=F(13)).grid(row=r, column=1, padx=6)
+            ctk.CTkButton(self.frm_mat, text="✕", width=30, height=28, fg_color="transparent", text_color=GRIGIO,
+                          hover_color="#F2F4F7",
                           command=lambda x=m: self.rimuovi_materiale(cur["corso"], cur["id"], x)
-                          ).grid(row=r, column=2, padx=(0, 10))
+                          ).grid(row=r, column=2, padx=(0, 14))
             r += 1
         if not l["materiali"]:
             suggerimento = "Trascina qui slide, dispense o foto, oppure usa «+ Aggiungi»." if self.dnd else \
                 "Usa «+ Aggiungi» per allegare slide, dispense o foto."
-            ctk.CTkLabel(self.frm_mat, text=suggerimento, text_color=GRIGIO
-                         ).grid(row=r, column=0, columnspan=3, sticky="w", padx=14)
+            ctk.CTkLabel(self.frm_mat, text=suggerimento, text_color=GRIGIO, font=F(13)
+                         ).grid(row=r, column=0, columnspan=3, sticky="w", padx=20)
             r += 1
-        ctk.CTkFrame(self.frm_mat, height=8, fg_color="transparent").grid(row=r, column=0)
+        ctk.CTkFrame(self.frm_mat, height=10, width=10, fg_color="transparent").grid(row=r, column=0, pady=(0, 2))
 
     # ------------------------------------------------------------------ menu «+ Aggiungi»
     def menu_aggiungi(self, bottone, corso, lezione_id):
@@ -676,22 +910,30 @@ class App:
     def _scheda_appunti(self, tab):
         ctk = self.ctk
         tab.grid_columnconfigure(0, weight=1)
-        self.frm_recupero = ctk.CTkFrame(tab, fg_color="#fdebd0", corner_radius=10)
-        self.frm_recupero.grid_columnconfigure(0, weight=1)
 
         top = ctk.CTkFrame(tab, fg_color="transparent")
-        top.grid(row=1, column=0, sticky="ew", padx=4, pady=(4, 4))
+        top.grid(row=0, column=0, sticky="ew", pady=(0, 14))
         top.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(top, text="Appunti recenti", font=ctk.CTkFont(size=16, weight="bold")
-                     ).grid(row=0, column=0, sticky="w")
-        ctk.CTkButton(top, text="Apri cartella", width=110, command=self.apri_cartella
-                      ).grid(row=0, column=1, padx=(6, 0))
-        ctk.CTkButton(top, text="Aggiorna", width=90, fg_color="#8a8f98", hover_color="#6f747c",
-                      command=self.aggiorna_appunti).grid(row=0, column=2, padx=(6, 0))
-        self.lst_appunti = ctk.CTkScrollableFrame(tab)
-        self.lst_appunti.grid(row=2, column=0, sticky="nsew", padx=4, pady=4)
+        ctk.CTkLabel(top, text="Appunti", font=F(24, "bold"), anchor="w").grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(top, text="Le lezioni trasformate in appunti, dalla più recente.", text_color=GRIGIO,
+                     anchor="w").grid(row=1, column=0, sticky="w")
+        ctk.CTkButton(top, text="↻  Aggiorna", width=110, height=40, command=self.aggiorna_appunti, **SECONDARIO
+                      ).grid(row=0, column=1, rowspan=2, padx=(8, 0))
+        ctk.CTkButton(top, text="Apri cartella", width=130, height=40, command=self.apri_cartella, **SECONDARIO
+                      ).grid(row=0, column=2, rowspan=2, padx=(8, 0))
+
+        self.frm_recupero = ctk.CTkFrame(tab, fg_color="#FFFAEB", border_width=1, border_color="#FEDF89",
+                                         corner_radius=12)
+        self.frm_recupero.grid_columnconfigure(0, weight=1)
+
+        self.lst_appunti = ctk.CTkScrollableFrame(tab, **CARD)
+        self.lst_appunti.grid(row=2, column=0, sticky="nsew")
         self.lst_appunti.grid_columnconfigure(0, weight=1)
         tab.grid_rowconfigure(2, weight=1)
+
+    def _nuova_da_appunti(self):
+        self.tabs.set("Lezione")
+        self.avvia()
 
     def aggiorna_appunti(self):
         ctk = self.ctk
@@ -700,24 +942,26 @@ class App:
         cur_id = self.lezione_corrente["id"] if self.lezione_corrente else None
         da_fare = corsi.lezioni_da_completare(self.cfg, escludi_id=cur_id)
         if da_fare:
-            self.frm_recupero.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 8))
-            ctk.CTkLabel(self.frm_recupero, text="Lezioni da completare", text_color="#7a4a00",
-                         font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, sticky="w", padx=12, pady=(8, 0))
+            self.frm_recupero.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+            ctk.CTkLabel(self.frm_recupero, text="Lezioni da completare", text_color="#93370D",
+                         font=F(15, "bold")).grid(row=0, column=0, sticky="w", padx=16, pady=(12, 0))
             ctk.CTkLabel(self.frm_recupero, text="Registrate ma senza appunti (programma chiuso, connessione assente…).",
-                         text_color="#7a4a00").grid(row=1, column=0, columnspan=3, sticky="w", padx=12)
+                         text_color="#93370D", font=F(13)
+                         ).grid(row=1, column=0, columnspan=3, sticky="w", padx=16, pady=(0, 6))
             for i, (corso, l) in enumerate(da_fare):
                 riga = 2 + i
-                ctk.CTkLabel(self.frm_recupero, anchor="w", text_color="#4a3000",
+                pad = (4, 12) if i == len(da_fare) - 1 else 4
+                ctk.CTkLabel(self.frm_recupero, anchor="w", text_color="#4E1D09",
                              text=f"{corso} · {corsi.titolo_capitolo(l)} · "
                                   f"{dt.datetime.fromisoformat(l['inizio']):%d/%m %H:%M}"
-                             ).grid(row=riga, column=0, sticky="w", padx=12, pady=4)
+                             ).grid(row=riga, column=0, sticky="w", padx=16, pady=pad)
                 if l.get("trascrizione"):
-                    ctk.CTkButton(self.frm_recupero, text="Crea appunti", width=110,
+                    ctk.CTkButton(self.frm_recupero, text="Crea appunti", width=120, height=34,
                                   command=lambda c=corso, x=l: self.crea_appunti_di(c, x["id"])
-                                  ).grid(row=riga, column=1, padx=4)
-                ctk.CTkButton(self.frm_recupero, text="Elimina", width=80, fg_color="#8a8f98",
-                              hover_color="#6f747c", command=lambda c=corso, x=l: self.elimina_lezione(c, x)
-                              ).grid(row=riga, column=2, padx=(4, 12))
+                                  ).grid(row=riga, column=1, padx=4, pady=pad)
+                ctk.CTkButton(self.frm_recupero, text="Elimina", width=80, height=34,
+                              command=lambda c=corso, x=l: self.elimina_lezione(c, x), **PERICOLO
+                              ).grid(row=riga, column=2, padx=(4, 12), pady=pad)
         else:
             self.frm_recupero.grid_remove()
 
@@ -725,16 +969,28 @@ class App:
             w.destroy()
         files = [p for p in core.appunti_recenti(self.cfg) if not p.name.startswith("Dispensa – ")]
         if not files:
-            ctk.CTkLabel(self.lst_appunti, text="Nessun appunto ancora: registra la prima lezione!",
-                         text_color=GRIGIO).grid(row=0, column=0, pady=20)
+            vuoto = ctk.CTkFrame(self.lst_appunti, fg_color="transparent")
+            vuoto.grid(row=0, column=0, pady=(90, 40))
+            ctk.CTkLabel(vuoto, text="Nessun appunto ancora", font=F(18, "bold")).grid(row=0, column=0)
+            ctk.CTkLabel(vuoto, text="Registra la tua prima lezione: gli appunti compariranno qui\nappena pronti.",
+                         text_color=GRIGIO, justify="center").grid(row=1, column=0, pady=(6, 18))
+            ctk.CTkButton(vuoto, text="●   Inizia nuova lezione", width=240, height=48, corner_radius=12,
+                          font=F(15, "bold"), fg_color=C["rosso"], hover_color=C["rosso_hover"],
+                          command=self._nuova_da_appunti).grid(row=2, column=0)
         for i, p in enumerate(files):
             data = dt.datetime.fromtimestamp(p.stat().st_mtime)
-            ctk.CTkLabel(self.lst_appunti, anchor="w", justify="left",
-                         text=f"{p.parent.name}\n{p.stem}", font=ctk.CTkFont(size=12)
-                         ).grid(row=i, column=0, sticky="w", padx=6, pady=4)
-            ctk.CTkLabel(self.lst_appunti, text=f"{data:%d/%m %H:%M}", text_color=GRIGIO).grid(row=i, column=1, padx=6)
-            ctk.CTkButton(self.lst_appunti, text="Apri", width=70, command=lambda x=p: self.sistema.apri(x)
-                          ).grid(row=i, column=2, padx=6)
+            riga = ctk.CTkFrame(self.lst_appunti, fg_color="transparent")
+            riga.grid(row=i * 2, column=0, sticky="ew", padx=8, pady=10)
+            riga.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(riga, text=p.stem, font=F(14, "bold"), anchor="w", justify="left", wraplength=400
+                         ).grid(row=0, column=0, sticky="w")
+            ctk.CTkLabel(riga, text=f"{p.parent.name}  ·  {data:%d/%m %H:%M}", text_color=GRIGIO, font=F(13),
+                         anchor="w").grid(row=1, column=0, sticky="w")
+            ctk.CTkButton(riga, text="Apri", width=80, height=36, command=lambda x=p: self.sistema.apri(x),
+                          **SECONDARIO).grid(row=0, column=1, rowspan=2, padx=(12, 0))
+            if i < len(files) - 1:
+                ctk.CTkFrame(self.lst_appunti, height=1, corner_radius=0, fg_color=C["linea"]
+                             ).grid(row=i * 2 + 1, column=0, sticky="ew", padx=8)
         if self.finestra_dispensa:
             self.finestra_dispensa.aggiorna()
 
@@ -746,103 +1002,163 @@ class App:
         s = ctk.CTkScrollableFrame(tab, fg_color="transparent")
         s.grid(row=0, column=0, sticky="nsew")
         s.grid_columnconfigure(0, weight=1)
-        bold = ctk.CTkFont(weight="bold")
-        r = 0
+        bold = F(14, "bold")
+        pos = {"card": None, "r": 0, "n": 0}
+
+        def riga():
+            pos["r"] += 1
+            return pos["r"] - 1
+
+        def chiudi():
+            if pos["card"] is not None:
+                ctk.CTkFrame(pos["card"], height=16, width=10, fg_color="transparent").grid(row=riga(), column=0, pady=(0, 2))
+
+        def sezione(nome):
+            chiudi()
+            card = ctk.CTkFrame(s, **CARD)
+            card.grid(row=pos["n"], column=0, sticky="ew", padx=(0, 8), pady=(0, 12))
+            card.grid_columnconfigure(0, weight=1)
+            pos.update(card=card, r=0, n=pos["n"] + 1)
+            ctk.CTkLabel(card, text=nome.upper(), font=F(12, "bold"), text_color=GRIGIO, anchor="w"
+                         ).grid(row=riga(), column=0, sticky="w", padx=22, pady=(16, 0))
+
+        def separatore():
+            ctk.CTkFrame(pos["card"], height=1, corner_radius=0, fg_color=C["linea"]
+                         ).grid(row=riga(), column=0, sticky="ew", padx=22, pady=(16, 4))
 
         def titolo(testo, aiuto=None):
-            nonlocal r
-            ctk.CTkLabel(s, text=testo, font=bold, anchor="w").grid(row=r, column=0, sticky="w", pady=(12, 0))
-            r += 1
+            ctk.CTkLabel(pos["card"], text=testo, font=bold, anchor="w"
+                         ).grid(row=riga(), column=0, sticky="w", padx=22, pady=(10, 0))
             if aiuto:
-                ctk.CTkLabel(s, text=aiuto, text_color=GRIGIO, anchor="w", justify="left", wraplength=520
-                             ).grid(row=r, column=0, sticky="w")
-                r += 1
+                ctk.CTkLabel(pos["card"], text=aiuto, text_color=GRIGIO, font=F(13), anchor="w", justify="left",
+                             wraplength=540).grid(row=riga(), column=0, sticky="w", padx=22)
 
+        def contenitore():
+            f = ctk.CTkFrame(pos["card"], fg_color="transparent")
+            f.grid(row=riga(), column=0, sticky="ew", padx=22, pady=(8, 0))
+            return f
+
+        def interruttore(testo, var, aiuto=None):
+            f = contenitore()
+            f.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(f, text=testo, font=bold, anchor="w").grid(row=0, column=0, sticky="w")
+            if aiuto:
+                ctk.CTkLabel(f, text=aiuto, text_color=GRIGIO, font=F(13), anchor="w", justify="left",
+                             wraplength=440).grid(row=1, column=0, sticky="w")
+            ctk.CTkSwitch(f, text="", variable=var, width=50, switch_width=44, switch_height=24
+                          ).grid(row=0, column=1, rowspan=2, padx=(16, 0))
+
+        # --- Account
+        sezione("Account")
         titolo("Chiave API di Claude", "Si crea su platform.claude.com → Chiavi API. Incolla qui la chiave "
                                        "(inizia con sk-ant-).")
-        fk = ctk.CTkFrame(s, fg_color="transparent")
-        fk.grid(row=r, column=0, sticky="ew", pady=(4, 0)); r += 1
+        fk = contenitore()
         fk.grid_columnconfigure(0, weight=1)
-        self.ent_chiave = ctk.CTkEntry(fk, show="•", height=34, placeholder_text="sk-ant-…")
+        self.ent_chiave = ctk.CTkEntry(fk, show="•", height=40, placeholder_text="sk-ant-…")
         self.ent_chiave.grid(row=0, column=0, sticky="ew")
         self.ent_chiave.insert(0, self.cfg.get("chiave_api_anthropic", ""))
         self.ent_chiave.bind("<FocusOut>", lambda e: self._pulisci_chiave())
         self.ent_chiave.bind("<<Paste>>", lambda e: self.root.after(50, self._pulisci_chiave))
         self.var_mostra = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(fk, text="Mostra", variable=self.var_mostra, width=70,
-                        command=lambda: self.ent_chiave.configure(show="" if self.var_mostra.get() else "•")
-                        ).grid(row=0, column=1, padx=6)
-        self.btn_verifica = ctk.CTkButton(fk, text="Verifica", width=90, command=self.verifica_chiave)
-        self.btn_verifica.grid(row=0, column=2)
-        self.lbl_verifica = ctk.CTkLabel(s, text="", anchor="w")
-        self.lbl_verifica.grid(row=r, column=0, sticky="w"); r += 1
 
+        def mostra_nascondi():
+            self.var_mostra.set(not self.var_mostra.get())
+            self.ent_chiave.configure(show="" if self.var_mostra.get() else "•")
+            btn_mostra.configure(text="Nascondi" if self.var_mostra.get() else "Mostra")
+        btn_mostra = ctk.CTkButton(fk, text="Mostra", width=96, height=40, command=mostra_nascondi, **SECONDARIO)
+        btn_mostra.grid(row=0, column=1, padx=(8, 0))
+        self.btn_verifica = ctk.CTkButton(fk, text="Verifica", width=96, height=40, command=self.verifica_chiave,
+                                          **SECONDARIO)
+        self.btn_verifica.grid(row=0, column=2, padx=(8, 0))
+        self.lbl_verifica = ctk.CTkLabel(pos["card"], text="", anchor="w", font=F(13))
+        self.lbl_verifica.grid(row=riga(), column=0, sticky="w", padx=22, pady=(4, 0))
+
+        # --- Trascrizione
+        sezione("Trascrizione")
         titolo("Qualità della trascrizione", "Veloce: per PC lenti. Standard: consigliata. "
                                              "Preciso: meno errori su nomi e numeri, ma richiede un PC più potente.")
-        self.seg_qualita = ctk.CTkSegmentedButton(s, values=list(QUALITA_ETICHETTE.values()))
-        self.seg_qualita.grid(row=r, column=0, sticky="w", pady=(4, 0)); r += 1
+        fq = contenitore()
+        self.seg_qualita = ctk.CTkSegmentedButton(fq, values=list(QUALITA_ETICHETTE.values()), height=40,
+                                                  font=F(14))
+        self.seg_qualita.grid(row=0, column=0, sticky="w")
         self.seg_qualita.set(QUALITA_ETICHETTE[self.cfg["qualita_trascrizione"]])
-
+        separatore()
         titolo("Contenuti presenti solo nei materiali", "Cosa fare con ciò che è nelle slide o nelle dispense "
                                                          "ma il docente non spiega a lezione.")
-        self.opt_extra = ctk.CTkOptionMenu(s, values=list(EXTRA_OPZIONI.keys()), width=300)
-        self.opt_extra.grid(row=r, column=0, sticky="w", pady=(4, 0)); r += 1
+        fe = contenitore()
+        self.opt_extra = ctk.CTkOptionMenu(fe, values=list(EXTRA_OPZIONI.keys()), width=340, height=40,
+                                           dynamic_resizing=False)
+        self.opt_extra.grid(row=0, column=0, sticky="w")
         self.opt_extra.set(next(k for k, v in EXTRA_OPZIONI.items()
                                 if v == self.cfg.get("contenuti_solo_materiali", "segna")))
 
+        # --- Salvataggio
+        sezione("Salvataggio")
         titolo("Cartella degli appunti")
-        fc = ctk.CTkFrame(s, fg_color="transparent")
-        fc.grid(row=r, column=0, sticky="ew", pady=(4, 0)); r += 1
+        fc = contenitore()
         fc.grid_columnconfigure(0, weight=1)
-        self.ent_cartella = ctk.CTkEntry(fc, height=34)
+        self.ent_cartella = ctk.CTkEntry(fc, height=40)
         self.ent_cartella.grid(row=0, column=0, sticky="ew")
         self.ent_cartella.insert(0, str(core.cartella_appunti(self.cfg)))
-        ctk.CTkButton(fc, text="Cambia…", width=90, command=self._scegli_cartella).grid(row=0, column=1, padx=(6, 0))
-
+        ctk.CTkButton(fc, text="Cambia…", width=110, height=40, command=self._scegli_cartella, **SECONDARIO
+                      ).grid(row=0, column=1, padx=(8, 0))
+        separatore()
         titolo("Stop automatico", "Se non arriva audio per questo tempo la lezione viene chiusa e trasformata "
                                   "in appunti. Un minuto prima compare un avviso.")
-        self.opt_stop = ctk.CTkOptionMenu(s, values=list(STOP_OPZIONI.keys()))
-        self.opt_stop.grid(row=r, column=0, sticky="w", pady=(4, 0)); r += 1
+        fst = contenitore()
+        self.opt_stop = ctk.CTkOptionMenu(fst, values=list(STOP_OPZIONI.keys()), width=170, height=40)
+        self.opt_stop.grid(row=0, column=0, sticky="w")
         minuti = int(self.cfg.get("minuti_silenzio_stop_automatico", 8))
         self.opt_stop.set(next((k for k, v in STOP_OPZIONI.items() if v == minuti), f"{minuti} minuti"))
 
-        titolo("Comportamento")
+        # --- Comportamento
+        sezione("Comportamento")
         self.var_solo_browser = ctk.BooleanVar(value=bool(self.cfg.get("solo_browser", True)))
-        ctk.CTkSwitch(s, text="Registra solo la lezione (browser, Zoom, Teams): silenzia Spotify, notifiche e il resto",
-                      variable=self.var_solo_browser).grid(row=r, column=0, sticky="w", pady=(4, 0)); r += 1
+        interruttore("Registra solo la lezione", self.var_solo_browser,
+                     "Browser, Zoom, Teams: silenzia Spotify, notifiche e il resto.")
+        separatore()
         self.var_apri = ctk.BooleanVar(value=bool(self.cfg.get("apri_appunti_al_termine", True)))
-        ctk.CTkSwitch(s, text="Apri gli appunti appena pronti", variable=self.var_apri
-                      ).grid(row=r, column=0, sticky="w", pady=(6, 0)); r += 1
+        interruttore("Apri gli appunti appena pronti", self.var_apri)
+        separatore()
         self.var_avvio = ctk.BooleanVar(value=self.sistema.avvio_automatico_attivo())
-        ctk.CTkSwitch(s, text="Avvia con Windows (parte ridotto vicino all'orologio)", variable=self.var_avvio
-                      ).grid(row=r, column=0, sticky="w", pady=(6, 0)); r += 1
+        interruttore("Avvia con Windows", self.var_avvio, "Parte ridotto vicino all'orologio.")
 
+        # --- Stile degli appunti
+        sezione("Stile degli appunti")
         titolo("Come vuoi gli appunti", "Scrivilo a parole: Claude seguirà queste istruzioni.")
-        self.txt_stile = ctk.CTkTextbox(s, height=170, wrap="word")
-        self.txt_stile.grid(row=r, column=0, sticky="ew", pady=(4, 0)); r += 1
+        ft = contenitore()
+        ft.grid_columnconfigure(0, weight=1)
+        self.txt_stile = ctk.CTkTextbox(ft, height=170, wrap="word", border_width=1,
+                                        border_color=C["bordo_input"], font=F(14))
+        self.txt_stile.grid(row=0, column=0, sticky="ew")
         self.txt_stile.insert("1.0", self.cfg.get("stile_appunti", ""))
 
-        titolo("Aggiornamenti")
-        fa = ctk.CTkFrame(s, fg_color="transparent")
-        fa.grid(row=r, column=0, sticky="ew", pady=(4, 0)); r += 1
-        ctk.CTkLabel(fa, text=f"Versione installata: {core.APP_VERSIONE}").grid(row=0, column=0, sticky="w", padx=(0, 10))
-        self.btn_controlla = ctk.CTkButton(fa, text="Controlla aggiornamenti", width=180,
-                                           command=lambda: self.controlla_aggiornamenti(manuale=True))
+        # --- Aggiornamenti
+        sezione("Aggiornamenti")
+        fa = contenitore()
+        fa.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(fa, text=f"Versione installata: {core.APP_VERSIONE}", anchor="w"
+                     ).grid(row=0, column=0, sticky="w")
+        self.btn_controlla = ctk.CTkButton(fa, text="Controlla aggiornamenti", width=200, height=40,
+                                           command=lambda: self.controlla_aggiornamenti(manuale=True), **SECONDARIO)
         self.btn_controlla.grid(row=0, column=1)
-        self.lbl_agg_stato = ctk.CTkLabel(s, text="", text_color=GRIGIO, anchor="w")
-        self.lbl_agg_stato.grid(row=r, column=0, sticky="w"); r += 1
+        self.lbl_agg_stato = ctk.CTkLabel(pos["card"], text="", text_color=GRIGIO, anchor="w", font=F(13))
+        self.lbl_agg_stato.grid(row=riga(), column=0, sticky="w", padx=22)
         import aggiornamenti
         prec = aggiornamenti.versione_precedente()
         if prec:
-            ctk.CTkButton(s, text=f"Torna alla versione precedente ({prec})", width=260, fg_color="#8a8f98",
-                          hover_color="#6f747c", command=self.torna_indietro).grid(row=r, column=0, sticky="w", pady=(4, 0))
-            r += 1
+            ctk.CTkButton(pos["card"], text=f"Torna alla versione precedente ({prec})", width=10, height=36,
+                          command=self.torna_indietro, **FANTASMA).grid(row=riga(), column=0, sticky="w", padx=14)
+        chiudi()
 
-        fs = ctk.CTkFrame(s, fg_color="transparent")
-        fs.grid(row=r, column=0, sticky="ew", pady=(14, 8)); r += 1
-        ctk.CTkButton(fs, text="Salva impostazioni", height=38, command=self.salva_impostazioni).grid(row=0, column=0)
-        self.lbl_salvato = ctk.CTkLabel(fs, text="", text_color="#1e8449")
-        self.lbl_salvato.grid(row=0, column=1, padx=10)
+        # --- pulsante Salva sempre visibile, fuori dallo scorrimento
+        fs = ctk.CTkFrame(tab, fg_color="transparent")
+        fs.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+        fs.grid_columnconfigure(0, weight=1)
+        self.lbl_salvato = ctk.CTkLabel(fs, text="", text_color=C["ok"], anchor="w")
+        self.lbl_salvato.grid(row=0, column=0, sticky="w")
+        ctk.CTkButton(fs, text="Salva impostazioni", width=190, height=44, font=F(14, "bold"),
+                      command=self.salva_impostazioni).grid(row=0, column=1)
 
     # ------------------------------------------------------------------ tray
     def _avvia_tray(self):
@@ -991,28 +1307,44 @@ class App:
             ok, testo = msg[1], msg[2]
             self.btn_verifica.configure(state="normal")
             self.lbl_verifica.configure(text=("✔ " if ok else "✖ ") + testo,
-                                        text_color="#1e8449" if ok else "#c0392b")
+                                        text_color="#067647" if ok else "#B42318")
 
     def _aggiorna_stato_ui(self):
-        colore = COLORI[self.stato]
-        self.lbl_pallino.configure(text_color=colore)
-        self.lbl_stato.configure(text=TESTI_STATO[self.stato])
+        sfondo, testo = CHIP[self.stato]
+        self.chip_stato.configure(fg_color=sfondo)
+        self.lbl_pallino.configure(text_color=testo)
+        self.lbl_stato.configure(text=TESTI_STATO[self.stato], text_color=testo)
         self.lbl_dettaglio.configure(text=self.dettaglio)
         reg = self.stato in ("registra", "pausa")
         if reg:
+            self.lbl_titolo.grid_remove()
+            self.lbl_timer.grid(row=1, column=0, sticky="w", padx=24, pady=(10, 0))
+            self.barra_livello.grid(row=3, column=0, sticky="ew", padx=24, pady=(14, 0))
             self.btn_avvia.grid_remove()
-            self.btn_pausa.grid(row=0, column=0, sticky="ew", padx=(0, 4))
-            self.btn_ferma.grid(row=0, column=1, columnspan=2, sticky="ew", padx=(4, 0))
+            self.btn_ferma.grid(row=0, column=0, columnspan=2, sticky="ew", padx=(0, 6))
+            self.btn_pausa.grid(row=0, column=2, sticky="ew", padx=(6, 0))
             self.btn_pausa.configure(text="▶  Riprendi" if self.stato == "pausa" else "❚❚  Pausa")
-            self.btn_modifica.grid(row=1, column=2, padx=(16, 4), sticky="e")
+            self.btn_modifica.grid(row=0, column=2, sticky="e")
+            if self.stato == "pausa":
+                self.chip_live.configure(text="In pausa", fg_color="#FFFAEB", text_color="#B54708")
+            else:
+                self.chip_live.configure(text="● Live", fg_color="#EEF4FF", text_color=C["accento_hover"])
         else:
+            self.lbl_timer.grid_remove()
+            self.lbl_timer.configure(text="")
+            self.lbl_titolo.configure(text=TITOLI_STATO[self.stato])
+            self.lbl_titolo.grid()
+            self.barra_livello.grid_remove()
+            self.barra_livello.set(0)
             self.btn_pausa.grid_remove()
             self.btn_ferma.grid_remove()
             self.btn_modifica.grid_remove()
             self.btn_avvia.grid(row=0, column=0, columnspan=3, sticky="ew")
-            self.btn_avvia.configure(state="normal" if self.stato == "pronto" else "disabled")
-            self.lbl_timer.configure(text="")
-            self.barra_livello.set(0)
+            pronto = self.stato == "pronto"
+            self.btn_avvia.configure(state="normal" if pronto else "disabled",
+                                     fg_color=C["rosso"] if pronto else "#FDA29B")
+            self.chip_live.configure(text="Elaborazione" if self.stato == "elabora" else "In attesa",
+                                     fg_color=C["chip"], text_color=GRIGIO)
         self._disegna_materiali()
         if hasattr(self, "banner_agg"):
             self._mostra_agg(self.info_agg)
@@ -1066,7 +1398,7 @@ class App:
 
     def _mostra_banner(self, visibile):
         if visibile and not self.banner_visibile:
-            self.banner.grid(row=2, column=0, sticky="ew", padx=4, pady=(0, 8))
+            self.banner.grid(row=2, column=0, sticky="ew", pady=(0, 12))
         elif not visibile and self.banner_visibile:
             self.banner.grid_remove()
             self.notificato_stop = False
@@ -1095,7 +1427,7 @@ class App:
             self.trascrittore = core.Trascrittore(qualita, self.cfg.get("lingua", "it"),
                                                   on_stato=lambda m: self.ui_q.put(("stato", "caricamento", m)))
             self.ui_q.put(("stato", "pronto", f"Trascrizione: {QUALITA_ETICHETTE[qualita]}. "
-                                              "Premi «Nuova lezione» per iniziare."))
+                                              "Premi «Inizia nuova lezione» per cominciare."))
         except Exception as e:
             log(traceback.format_exc())
             self.ui_q.put(("stato", "errore", f"Modello di trascrizione non caricato: {e}"))
@@ -1265,7 +1597,7 @@ class App:
             riassunto = "\n".join(n.lstrip("-*• ").strip() for n in note[:3] if n.strip())
             self.lbl_agg.configure(text=f"È disponibile la versione {info['versione']}"
                                         + (f"\n{riassunto}" if riassunto else ""))
-            self.banner_agg.grid(row=2, column=0, sticky="ew", padx=4, pady=(0, 8))
+            self.banner_agg.grid(row=2, column=0, sticky="ew", pady=(0, 12))
         else:
             self.banner_agg.grid_remove()
 
