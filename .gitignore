@@ -1,0 +1,6 @@
+__pycache__/
+.venv/
+config.json
+*.log
+autotest_risultato.txt
+_versione_precedente/
