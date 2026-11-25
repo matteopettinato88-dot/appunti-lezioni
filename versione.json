@@ -1,8 +1,10 @@
 {
-  "versione": "3.2.0",
+  "versione": "4.0.0",
   "note": [
-    "Nuova grafica: schede più chiare, pulsanti con la giusta importanza e colori con un solo significato",
-    "Durante la registrazione: timer grande, «Termina e crea appunti» e «Pausa» ben distinti",
-    "Impostazioni divise in sezioni, con «Salva impostazioni» sempre visibile"
+    "Ora funziona su Mac (macOS 13 o successivo): non più su Windows",
+    "Registra l'audio del Mac con ScreenCaptureKit, senza driver aggiuntivi",
+    "«Registra solo la lezione» prende solo l'audio di browser e videoconferenze",
+    "App Appunti Lezioni in Applicazioni, icona nel Dock, apertura all'accesso al Mac",
+    "PDF della dispensa con Pages o Word"
   ]
 }

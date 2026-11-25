@@ -20,13 +20,13 @@ import numpy as np
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
 APP_NOME = "Appunti Lezioni"
-APP_VERSIONE = "3.2.0"
+APP_VERSIONE = "4.0.0"
 APP_DIR = Path(__file__).resolve().parent
 
 
 def cartella_dati():
-    base = os.environ.get("APPDATA") or str(Path.home() / ".config")
-    p = Path(base) / "AppuntiLezioni"
+    """~/Library/Application Support/AppuntiLezioni: configurazione, registro, lezioni in corso."""
+    p = Path.home() / "Library" / "Application Support" / "AppuntiLezioni"
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -53,7 +53,7 @@ DEFAULT_CONFIG = {
     "contenuti_solo_materiali": "segna",
     "repo_aggiornamenti": "matteopettinato88-dot/appunti-lezioni",
     "ultimo_controllo_aggiornamenti": "",
-    "avvio_con_windows": False,
+    "avvio_automatico": False,
     "corsi": [],
     "ultimo_corso": "",
     "stile_appunti": (
@@ -184,14 +184,6 @@ def save_config(cfg):
 
 
 def cartella_documenti():
-    if sys.platform == "win32":
-        try:
-            import ctypes
-            buf = ctypes.create_unicode_buffer(1024)
-            if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf) == 0 and buf.value:
-                return Path(buf.value)
-        except Exception:
-            pass
     return Path.home() / "Documents"
 
 
@@ -279,31 +271,39 @@ def punto_di_taglio(data, sr, finestra_ricerca_s=10.0, passo_s=0.1):
     return inizio + int(np.argmin(energie)) * passo + passo // 2
 
 
-def trova_loopback(pa, pyaudio):
-    try:
-        wasapi = pa.get_host_api_info_by_type(pyaudio.paWASAPI)
-    except OSError:
-        raise RuntimeError("Questo programma funziona su Windows 10/11.")
-    uscita = pa.get_device_info_by_index(wasapi["defaultOutputDevice"])
-    if uscita.get("isLoopbackDevice"):
-        return uscita
-    for lb in pa.get_loopback_device_info_generator():
-        if uscita["name"] in lb["name"]:
-            return lb
-    raise RuntimeError(f"Non riesco a registrare dall'uscita audio '{uscita['name']}'.")
+# Bundle id (o loro inizio) delle app che contengono la lezione: browser e videoconferenze.
+# Con "Registra solo la lezione" attivo si registra solo il loro audio (Spotify, notifiche e il resto no).
+APP_LEZIONE = [
+    "com.apple.safari", "com.google.chrome", "org.mozilla.firefox", "com.microsoft.edgemac",
+    "com.brave.browser", "com.operasoftware.opera", "com.vivaldi.vivaldi", "company.thebrowser.",
+    "org.chromium.chromium", "app.zen-browser", "com.duckduckgo.macos.browser",
+    "us.zoom.xos", "com.microsoft.teams", "com.cisco.webex", "cisco-systems.spark", "com.webex.",
+    "com.skype.skype", "com.logmein.gotomeeting", "com.google.meet",
+]
+SR_CATTURA = 48000
+
+
+class PermessoMancante(RuntimeError):
+    pass
+
+
+MSG_PERMESSO = ("Il Mac non ha ancora dato il permesso di registrare l'audio.\n\n"
+                "Apri Impostazioni di Sistema → Privacy e sicurezza → Registrazione schermo e audio di "
+                "sistema, attiva «Appunti Lezioni», poi chiudi e riapri il programma.")
 
 
 class Registratore:
-    """Registra ciò che esce dalle casse/cuffie e consegna blocchi di audio mono."""
+    """
+    Registra l'audio del Mac (non il microfono) tramite il programma cattura-audio (ScreenCaptureKit)
+    e consegna blocchi di audio mono. Con solo_lezione registra solo browser e app di videoconferenza.
+    """
 
-    def __init__(self, cfg, on_blocco):
-        import pyaudiowpatch as pyaudio
+    def __init__(self, cfg, on_blocco, solo_lezione=None):
+        import sistema
 
-        self.pyaudio = pyaudio
-        self.pa = pyaudio.PyAudio()
-        self.dispositivo = trova_loopback(self.pa, pyaudio)
-        self.sr = int(self.dispositivo["defaultSampleRate"])
-        self.canali = max(1, int(self.dispositivo["maxInputChannels"]))
+        self.eseguibile = sistema.helper_audio()
+        self.solo_lezione = bool(cfg.get("solo_browser", True) if solo_lezione is None else solo_lezione)
+        self.sr = SR_CATTURA
         self.on_blocco = on_blocco
         self.secondi_blocco = float(cfg["secondi_per_blocco"])
         self.soglia = float(cfg["soglia_silenzio"])
@@ -317,41 +317,93 @@ class Registratore:
         self.ultimo_audio = time.time()
         self.in_pausa = False
         self.attivo = False
-        self.stream = None
+        self.proc = None
         self.thread = None
-        log(f"Registro da: {self.dispositivo['name']} ({self.sr} Hz, {self.canali} canali)")
+        self.lettore = None
+        self.app_registrate = ""
+        self._pronto = threading.Event()
+        self._errore = None
 
-    def _callback(self, in_data, frame_count, time_info, status):
-        if not self.in_pausa and in_data:
-            a = np.frombuffer(in_data, dtype=np.int16).astype(np.float32) / 32768.0
-            if self.canali > 1:
-                a = a[: len(a) // self.canali * self.canali].reshape(-1, self.canali).mean(axis=1)
-            if len(a):
-                rms = float(np.sqrt(np.mean(a ** 2)))
-                self.livello = rms
-                self.ultimo_audio = time.time()
-                if rms > self.soglia:
-                    self.ultimo_suono = time.time()
-                with self.lock:
-                    self.buffer.append(a)
-                    self.campioni += len(a)
-                    self.campioni_totali += len(a)
-        return (None, self.pyaudio.paContinue)
+    def _elabora(self, a):
+        if self.in_pausa or not len(a):
+            return
+        rms = float(np.sqrt(np.mean(a ** 2)))
+        self.livello = rms
+        self.ultimo_audio = time.time()
+        if rms > self.soglia:
+            self.ultimo_suono = time.time()
+        with self.lock:
+            self.buffer.append(a)
+            self.campioni += len(a)
+            self.campioni_totali += len(a)
+
+    def _leggi_audio(self):
+        resto = b""
+        fd = self.proc.stdout.fileno()
+        while True:
+            try:
+                dati = os.read(fd, 65536)
+            except OSError:
+                break
+            if not dati:
+                break
+            dati = resto + dati
+            n = len(dati) // 4 * 4
+            resto = dati[n:]
+            if n:
+                self._elabora(np.frombuffer(dati[:n], dtype="<f4").astype(np.float32))
+
+    def _leggi_stato(self):
+        for riga in self.proc.stderr:
+            riga = riga.decode("utf-8", "replace").strip()
+            if not riga:
+                continue
+            if riga == "PRONTO":
+                self._pronto.set()
+            elif riga == "PERMESSO_NEGATO":
+                self._errore = PermessoMancante(MSG_PERMESSO)
+                self._pronto.set()
+            elif riga.startswith("ERRORE:"):
+                self._errore = self._errore or RuntimeError(riga[7:].strip())
+                self._pronto.set()
+                log(f"Cattura audio: {riga}")
+            elif riga.startswith("APP:"):
+                self.app_registrate = riga[4:].strip()
+                log(f"Registro l'audio di: {self.app_registrate or 'nessuna app aperta per ora'}")
+            else:
+                log(f"Cattura audio: {riga}")
+        if self.attivo:
+            log("Il programma di cattura audio si è chiuso durante la registrazione.")
+        self._pronto.set()
 
     def secondi_registrati(self):
         return self.campioni_totali / self.sr
 
     def livello_attuale(self):
-        # Con WASAPI, se nulla suona non arrivano dati: il livello va a zero.
+        # Se nulla suona non arrivano dati: il livello va a zero.
         return 0.0 if time.time() - self.ultimo_audio > 0.5 or self.in_pausa else self.livello
 
     def avvia(self):
-        self.stream = self.pa.open(
-            format=self.pyaudio.paInt16, channels=self.canali, rate=self.sr, input=True,
-            input_device_index=self.dispositivo["index"], frames_per_buffer=2048,
-            stream_callback=self._callback,
-        )
-        self.stream.start_stream()
+        import subprocess
+        import sistema
+
+        sistema.assicura_permesso_audio()
+        cmd = [str(self.eseguibile)]
+        if self.solo_lezione:
+            cmd += ["--app", ",".join(APP_LEZIONE)]
+        self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, bufsize=0)
+        threading.Thread(target=self._leggi_stato, daemon=True).start()
+        self.lettore = threading.Thread(target=self._leggi_audio, daemon=True)
+        self.lettore.start()
+        if not self._pronto.wait(20):
+            self._chiudi_processo()
+            raise RuntimeError("La cattura dell'audio non è partita entro 20 secondi.")
+        if self._errore or self.proc.poll() not in (None, 0):
+            self._chiudi_processo()
+            raise self._errore or RuntimeError("La cattura dell'audio si è chiusa subito.")
+        log("Registro l'audio del Mac" + (" (solo browser e videoconferenze)" if self.solo_lezione else "")
+            + f" a {self.sr} Hz")
         self.attivo = True
         self.ultimo_suono = time.time()
         self.thread = threading.Thread(target=self._ciclo, daemon=True)
@@ -391,20 +443,30 @@ class Registratore:
     def rinvia_stop(self):
         self.ultimo_suono = time.time()
 
+    def _chiudi_processo(self):
+        p = self.proc
+        if not p:
+            return
+        try:
+            if p.poll() is None:
+                p.terminate()
+                try:
+                    p.wait(timeout=3)
+                except Exception:
+                    p.kill()
+        except Exception:
+            pass
+
     def ferma(self):
+        if not self.attivo and not self.proc:
+            return
         self.attivo = False
         if self.thread:
             self.thread.join(timeout=5)
-        try:
-            if self.stream:
-                self.stream.stop_stream()
-                self.stream.close()
-        except Exception:
-            pass
-        try:
-            self.pa.terminate()
-        except Exception:
-            pass
+        self._chiudi_processo()
+        if self.lettore:
+            self.lettore.join(timeout=3)
+        self.proc = None
         self._consegna(finale=True)
 
 
@@ -448,7 +510,7 @@ class Trascrittore:
 class Sessione:
     """
     Una lezione in corso. Ogni blocco trascritto viene subito aggiunto a un file su disco
-    (con il segnaposto [min N]), così se il PC si spegne la trascrizione non va persa.
+    (con il segnaposto [min N]), così se il Mac si spegne la trascrizione non va persa.
     I termini chiave dei materiali (self.termini) guidano Whisper e si possono aggiornare dal vivo.
     """
 
@@ -530,9 +592,14 @@ class Sessione:
         """Da chiamare quando la trascrizione è al sicuro nella cartella del corso."""
         elimina_sessione(self.id)
 
+    def annulla(self):
+        """La registrazione non è partita: ferma il lavoro in sottofondo e cancella i file."""
+        self.coda.put(None)
+        elimina_sessione(self.id)
+
 
 def sessioni_incompiute():
-    """Registrazioni interrotte (PC spento, programma chiuso) rimaste in %APPDATA%."""
+    """Registrazioni interrotte (Mac spento, programma chiuso) rimaste nella cartella dei dati."""
     risultati = []
     for meta in sorted(SESSIONI_DIR.glob("*.json")):
         testo_p = meta.with_suffix(".txt")

@@ -2,10 +2,11 @@
 """
 Appunti Lezioni – l'applicazione con interfaccia.
 
-  pythonw app.py              apre la finestra
-  pythonw app.py --nascosto   parte ridotta nella barra delle applicazioni (avvio con Windows)
-  python  app.py --installa   crea i collegamenti su Desktop e menu Start
-  python  app.py --autotest   prova automatica completa (vedi autotest.py)
+Di solito si avvia da "Appunti Lezioni.app" (in ~/Applications), che passa questi argomenti:
+  app.py              apre la finestra
+  app.py --nascosto   parte senza finestra (apertura all'accesso al Mac)
+  app.py --installa   prepara la cattura audio e crea Appunti Lezioni.app (usato da installa.sh)
+  app.py --autotest   prova automatica completa (vedi autotest.py)
 """
 
 import datetime as dt
@@ -171,42 +172,23 @@ TEMA = {'CTk': {'fg_color': ['#F5F6F8', '#F5F6F8']},
 
 
 def crea_icona(path, colore="#2553E6"):
+    """Icona 1024×1024 in stile macOS (quadrato arrotondato con margine), salvata in PNG."""
     from PIL import Image, ImageDraw
 
-    img = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
+    k = 4  # disegno pensato su 256 px, eseguito a 1024
+    img = Image.new("RGBA", (256 * k, 256 * k), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle((8, 8, 248, 248), radius=56, fill=colore)
-    d.rounded_rectangle((64, 52, 192, 204), radius=14, fill="white")
-    for y in (92, 120, 148, 176):
-        d.rectangle((86, y, 170, y + 8), fill=colore)
-    d.ellipse((150, 150, 214, 214), fill="#D92D20", outline="white", width=8)
-    img.save(path, sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
-    return img
-
-
-def icona_tray(stato):
-    from PIL import Image, ImageDraw
-
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.ellipse((4, 4, 60, 60), fill=COLORI.get(stato, COLORI["pronto"]))
-    if stato == "registra":
-        d.ellipse((22, 22, 42, 42), fill="white")
-    elif stato == "pausa":
-        d.rectangle((21, 20, 28, 44), fill="white")
-        d.rectangle((36, 20, 43, 44), fill="white")
-    else:
-        d.rectangle((20, 18, 44, 46), fill="white")
-        for y in (24, 31, 38):
-            d.rectangle((24, y, 40, y + 3), fill=COLORI.get(stato, COLORI["pronto"]))
+    d.rounded_rectangle((26 * k, 26 * k, 230 * k, 230 * k), radius=46 * k, fill=colore)
+    d.rounded_rectangle((74 * k, 62 * k, 182 * k, 194 * k), radius=12 * k, fill="white")
+    for y in (96, 120, 144, 168):
+        d.rectangle((94 * k, y * k, 162 * k, (y + 7) * k), fill=colore)
+    d.ellipse((146 * k, 146 * k, 202 * k, 202 * k), fill="#D92D20", outline="white", width=7 * k)
+    img.save(path)
     return img
 
 
 def imposta_icona(finestra, ico):
-    try:
-        finestra.iconbitmap(str(ico))
-    except Exception:
-        pass
+    """Su macOS l'icona è quella del Dock, impostata una volta sola sulla finestra principale."""
 
 
 def F(size=14, weight="normal"):
@@ -597,8 +579,9 @@ class FinestraDispensa:
                 self.app.ui_q.put(("apri", pdf))
             except Exception as e:
                 log(f"Esportazione PDF fallita: {e}")
-                self.app.ui_q.put(("avviso", "Per creare il PDF serve Microsoft Word. In alternativa apri la "
-                                             "dispensa e usa File → Esporta → PDF."))
+                self.app.ui_q.put(("avviso", "Non sono riuscito a creare il PDF. Serve Pages (gratuito) o "
+                                             "Microsoft Word: in alternativa apri la dispensa e usa "
+                                             "File → Esporta in → PDF."))
         threading.Thread(target=lavoro, daemon=True).start()
         messagebox.showinfo(core.APP_NOME, "Creo il PDF della dispensa: si aprirà tra qualche secondo.", parent=self.win)
 
@@ -631,11 +614,9 @@ class App:
         self.ricarica_modello_dopo = False
         self.sessione = None
         self.lezione_corrente = None      # {"corso", "id", "titolo"}
-        self.isolamento = None
         self.banner_visibile = False
-        self.avvisato_tray = False
+        self.avvisato_nascosta = False
         self.notificato_stop = False
-        self.tray = None
         self.finestra_dispensa = None
         self._live_provvisorio = False
 
@@ -646,7 +627,7 @@ class App:
         except Exception:
             log(traceback.format_exc())
 
-        self.ico = core.DATI / "icona.ico"
+        self.ico = core.DATI / "icona.png"
         try:
             crea_icona(self.ico)
         except Exception:
@@ -664,10 +645,19 @@ class App:
         self.root.geometry("680x880")
         self.root.minsize(580, 700)
         try:
-            self.root.iconbitmap(str(self.ico))
+            import tkinter as tk
+            self._icona_dock = tk.PhotoImage(file=str(self.ico))
+            self.root.iconphoto(True, self._icona_dock)
         except Exception:
             pass
         self.root.protocol("WM_DELETE_WINDOW", self.nascondi)
+        # Comportamento da app Mac: clic sull'icona nel Dock riapre la finestra, ⌘Q chiede conferma
+        try:
+            self.root.createcommand("::tk::mac::ReopenApplication", self.mostra)
+            self.root.createcommand("::tk::mac::Quit", self.esci)
+            self.root.createcommand("tk::mac::ShowPreferences", lambda: (self.mostra(), self.tabs.set("Impostazioni")))
+        except Exception:
+            log(traceback.format_exc())
 
         self.tabs = Schede(self.root)
         self.tabs.pack(fill="both", expand=True, padx=20, pady=(16, 20))
@@ -676,8 +666,6 @@ class App:
         self._scheda_impostazioni(self.tabs.add("Impostazioni"))
         self.abilita_drop(self.root, self._drop_principale)
 
-        self._avvia_tray()
-        sistema.ripristina_sospesi()
         self._aggiorna_stato_ui()
         self.aggiorna_appunti()
         self.root.after(150, self._tick)
@@ -852,7 +840,7 @@ class App:
         import tkinter as tk
         from tkinter import filedialog
 
-        menu = tk.Menu(self.root, tearoff=0, font=("Segoe UI", 10))
+        menu = tk.Menu(self.root, tearoff=0)
 
         def scegli():
             nomi = filedialog.askopenfilenames(title="Aggiungi materiale", filetypes=TIPI_FILE)
@@ -1075,8 +1063,8 @@ class App:
 
         # --- Trascrizione
         sezione("Trascrizione")
-        titolo("Qualità della trascrizione", "Veloce: per PC lenti. Standard: consigliata. "
-                                             "Preciso: meno errori su nomi e numeri, ma richiede un PC più potente.")
+        titolo("Qualità della trascrizione", "Veloce: per Mac lenti. Standard: consigliata. "
+                                             "Preciso: meno errori su nomi e numeri, ma richiede un Mac più potente.")
         fq = contenitore()
         self.seg_qualita = ctk.CTkSegmentedButton(fq, values=list(QUALITA_ETICHETTE.values()), height=40,
                                                   font=F(14))
@@ -1115,13 +1103,14 @@ class App:
         sezione("Comportamento")
         self.var_solo_browser = ctk.BooleanVar(value=bool(self.cfg.get("solo_browser", True)))
         interruttore("Registra solo la lezione", self.var_solo_browser,
-                     "Browser, Zoom, Teams: silenzia Spotify, notifiche e il resto.")
+                     "Solo l'audio di browser, Zoom, Teams…: Spotify, notifiche e il resto restano fuori.")
         separatore()
         self.var_apri = ctk.BooleanVar(value=bool(self.cfg.get("apri_appunti_al_termine", True)))
         interruttore("Apri gli appunti appena pronti", self.var_apri)
         separatore()
         self.var_avvio = ctk.BooleanVar(value=self.sistema.avvio_automatico_attivo())
-        interruttore("Avvia con Windows", self.var_avvio, "Parte ridotto vicino all'orologio.")
+        interruttore("Apri all'accesso al Mac", self.var_avvio, "Parte senza finestra: la trovi con un clic "
+                                                                 "sull'icona nel Dock.")
 
         # --- Stile degli appunti
         sezione("Stile degli appunti")
@@ -1160,36 +1149,10 @@ class App:
         ctk.CTkButton(fs, text="Salva impostazioni", width=190, height=44, font=F(14, "bold"),
                       command=self.salva_impostazioni).grid(row=0, column=1)
 
-    # ------------------------------------------------------------------ tray
-    def _avvia_tray(self):
-        try:
-            import pystray
-        except Exception:
-            return
-        M = pystray.MenuItem
-        self.tray = pystray.Icon(
-            "appunti_lezioni", icona_tray("caricamento"), core.APP_NOME,
-            menu=pystray.Menu(
-                M("Mostra finestra", lambda: self.ui_q.put(("mostra",)), default=True),
-                M(lambda i: "Ferma e crea appunti" if self.sessione else "Nuova lezione",
-                  lambda: self.ui_q.put(("ferma",) if self.sessione else ("avvia_da_tray",))),
-                pystray.Menu.SEPARATOR,
-                M("Esci", lambda: self.ui_q.put(("esci",))),
-            ),
-        )
-        try:
-            self.tray.run_detached()
-        except Exception:
-            log("Icona nella barra non disponibile:\n" + traceback.format_exc())
-            self.tray = None
-
+    # ------------------------------------------------------------------ notifiche
     def notifica(self, titolo, testo):
         log(f"{titolo}: {testo}")
-        if self.tray:
-            try:
-                self.tray.notify(testo, titolo)
-            except Exception:
-                pass
+        self.sistema.notifica(titolo, testo)
 
     def mostra(self):
         self.root.deiconify()
@@ -1200,10 +1163,10 @@ class App:
 
     def nascondi(self):
         self.root.withdraw()
-        if not self.avvisato_tray:
-            self.notifica(core.APP_NOME, "Continuo a funzionare qui vicino all'orologio. "
-                                         "Clic sull'icona per riaprire la finestra.")
-            self.avvisato_tray = True
+        if not self.avvisato_nascosta:
+            self.notifica(core.APP_NOME, "Il programma resta aperto: clic sull'icona nel Dock per riaprire "
+                                         "la finestra. Per chiuderlo: ⌘Q.")
+            self.avvisato_nascosta = True
 
     def esci(self):
         from tkinter import messagebox
@@ -1218,10 +1181,6 @@ class App:
                     self.sessione.registratore.ferma()
                 except Exception:
                     pass
-        if self.isolamento:
-            self.isolamento.ferma()
-        if self.tray:
-            self.tray.stop()
         self.root.destroy()
 
     # ------------------------------------------------------------------ ciclo UI
@@ -1249,9 +1208,8 @@ class App:
             self._scrivi_live(msg[1])
         elif tipo == "mostra":
             self.mostra()
-        elif tipo == "avvia_da_tray":
-            self.mostra()
-            self.avvia()
+        elif tipo == "permesso":
+            self.mostra_permesso()
         elif tipo == "ferma":
             self.ferma()
         elif tipo == "esci":
@@ -1348,13 +1306,6 @@ class App:
         self._disegna_materiali()
         if hasattr(self, "banner_agg"):
             self._mostra_agg(self.info_agg)
-        if self.tray:
-            try:
-                self.tray.icon = icona_tray(self.stato)
-                self.tray.title = f"{core.APP_NOME} – {TESTI_STATO[self.stato]}"
-                self.tray.update_menu()
-            except Exception:
-                pass
 
     def _aggiorna_live(self):
         s = self.sessione
@@ -1422,6 +1373,16 @@ class App:
     # ------------------------------------------------------------------ modello
     def _carica_modello(self):
         qualita = self.cfg["qualita_trascrizione"]
+        try:
+            self.ui_q.put(("stato", "caricamento", "Preparo la cattura dell'audio…"))
+            self.sistema.compila_helper()
+            if not self.sistema.permesso_audio():
+                self.sistema.chiedi_permesso_audio()
+                self.ui_q.put(("permesso",))
+        except Exception as e:
+            log(traceback.format_exc())
+            self.ui_q.put(("stato", "errore", str(e)))
+            return
         self.ui_q.put(("stato", "caricamento", "Carico il modello di trascrizione…"))
         try:
             self.trascrittore = core.Trascrittore(qualita, self.cfg.get("lingua", "it"),
@@ -1431,6 +1392,12 @@ class App:
         except Exception as e:
             log(traceback.format_exc())
             self.ui_q.put(("stato", "errore", f"Modello di trascrizione non caricato: {e}"))
+
+    def mostra_permesso(self):
+        from tkinter import messagebox
+        self.mostra()
+        messagebox.showinfo(core.APP_NOME, core.MSG_PERMESSO + "\n\nApro ora le Impostazioni di Sistema.")
+        self.sistema.apri_impostazioni_permesso()
 
     def _dopo_lavorazione(self):
         if self.ricarica_modello_dopo:
@@ -1465,20 +1432,25 @@ class App:
             except Exception as e:
                 errori.append(str(e))
         lez = corsi.lezione(cfg, corso, lid)
+        sessione = None
         try:
-            self.sessione = core.Sessione(cfg, corso, lez["titolo"], self.trascrittore,
-                                          on_testo=lambda t: self.ui_q.put(("testo", t)), lezione_id=lid,
-                                          termini=corsi.termini_lezione(cfg, corso, lez))
+            sessione = core.Sessione(dict(cfg, solo_browser=bool(self.var_solo_browser.get())), corso,
+                                     lez["titolo"], self.trascrittore,
+                                     on_testo=lambda t: self.ui_q.put(("testo", t)), lezione_id=lid,
+                                     termini=corsi.termini_lezione(cfg, corso, lez))
+            sessione.registratore.avvia()
         except Exception as e:
             log(traceback.format_exc())
+            if sessione:
+                sessione.annulla()
             corsi.elimina_lezione(cfg, corso, lid)
-            messagebox.showerror(core.APP_NOME, f"Non riesco ad avviare la registrazione:\n\n{e}")
+            if isinstance(e, core.PermessoMancante):
+                self.mostra_permesso()
+            else:
+                messagebox.showerror(core.APP_NOME, f"Non riesco ad avviare la registrazione:\n\n{e}")
             return
+        self.sessione = sessione
         self.lezione_corrente = {"corso": corso, "id": lid, "titolo": lez["titolo"]}
-        if self.var_solo_browser.get():
-            self.isolamento = self.sistema.IsolamentoAudio()
-            self.isolamento.avvia()
-        self.sessione.registratore.avvia()
         self._scrivi_live("In ascolto… fai partire la lezione.", reset=True)
         self.stato, self.dettaglio = "registra", f"{corso} · {lez['titolo']}"
         self._aggiorna_stato_ui()
@@ -1525,12 +1497,7 @@ class App:
         threading.Thread(target=self._completa, args=(s, cur), daemon=True).start()
 
     def _completa(self, s, cur):
-        try:
-            testo = s.termina()
-        finally:
-            if self.isolamento:
-                self.isolamento.ferma()
-                self.isolamento = None
+        testo = s.termina()
         self.lezione_corrente = None
         corso, lid = cur["corso"], cur["id"]
         if not testo.strip():
@@ -1665,10 +1632,6 @@ class App:
 
     def _riavvia(self):
         import aggiornamenti
-        if self.isolamento:
-            self.isolamento.ferma()
-        if self.tray:
-            self.tray.stop()
         aggiornamenti.riavvia(["--attendi"])
         self.root.destroy()
 
@@ -1716,7 +1679,7 @@ class App:
         cfg["apri_appunti_al_termine"] = bool(self.var_apri.get())
         cfg["stile_appunti"] = self.txt_stile.get("1.0", "end").strip() or core.DEFAULT_CONFIG["stile_appunti"]
         avvio = bool(self.var_avvio.get())
-        cfg["avvio_con_windows"] = avvio
+        cfg["avvio_automatico"] = avvio
         messaggio = "Impostazioni salvate"
         if nuova_qualita != cfg["qualita_trascrizione"]:
             cfg["qualita_trascrizione"] = nuova_qualita
@@ -1732,7 +1695,7 @@ class App:
             if avvio != self.sistema.avvio_automatico_attivo():
                 self.sistema.imposta_avvio_automatico(avvio)
         except Exception as e:
-            messaggio += f" · avvio con Windows non impostato ({e})"
+            messaggio += f" · apertura all'accesso non impostata ({e})"
         self.aggiorna_appunti()
         self.lbl_salvato.configure(text="✔ " + messaggio)
         self.root.after(6000, lambda: self.lbl_salvato.configure(text=""))
@@ -1744,15 +1707,32 @@ class App:
 
 
 def installa():
-    """Crea icona e collegamenti (chiamato da installa.bat)."""
+    """Prepara la cattura audio e crea Appunti Lezioni.app in ~/Applications (chiamato da installa.sh)."""
     import sistema
-    ico = core.DATI / "icona.ico"
-    crea_icona(ico)
-    creati = sistema.crea_collegamenti(ico)
-    for c in creati:
-        print(f"Collegamento creato: {c}")
     core.load_config()
-    return bool(creati)
+    try:
+        sistema.compila_helper(forza=True)
+        print("Cattura audio pronta.")
+        ico = core.DATI / "icona.png"
+        crea_icona(ico)
+        app = sistema.crea_app(ico)
+        print(f"App creata: {app}")
+        return True
+    except Exception as e:
+        log(traceback.format_exc())
+        print(f"ERRORE: {e}")
+        return False
+
+
+def nome_nel_menu():
+    """Mostra «Appunti Lezioni» (e non «Python») nella barra dei menu."""
+    try:
+        from Foundation import NSBundle
+        info = NSBundle.mainBundle().localizedInfoDictionary() or NSBundle.mainBundle().infoDictionary()
+        if info is not None:
+            info["CFBundleName"] = core.APP_NOME
+    except Exception:
+        pass
 
 
 def main():
@@ -1777,6 +1757,7 @@ def main():
     if not istanza.prima:
         sistema.IstanzaUnica.chiedi_di_mostrare()
         return
+    nome_nel_menu()
     try:
         app = App(nascosto="--nascosto" in args)
         app_ref["app"] = app
@@ -1790,11 +1771,6 @@ def main():
         except Exception:
             pass
         raise
-    finally:
-        try:
-            sistema.ripristina_sospesi()
-        except Exception:
-            pass
 
 
 if __name__ == "__main__":

@@ -10,7 +10,8 @@ Come funziona:
   4. ripristina_precedente() rimette la copia di sicurezza (pulsante in Impostazioni).
 
 Non vengono mai toccati: appunti, dispense, materiali, configurazione e chiave API
-(stanno in Documenti\\Appunti lezioni e in %APPDATA%\\AppuntiLezioni).
+(stanno in Documenti/Appunti lezioni e in ~/Library/Application Support/AppuntiLezioni).
+Se cambia cattura_audio.swift, il programma di cattura audio viene ricompilato al riavvio.
 """
 
 import io
@@ -27,7 +28,7 @@ from pathlib import Path
 import core
 from core import APP_DIR, log
 
-ESTENSIONI = {".py", ".bat", ".txt", ".md"}
+ESTENSIONI = {".py", ".swift", ".sh", ".txt", ".md"}
 ESCLUSI = {"config.json", "autotest_risultato.txt", "installazione.log", "appunti_lezioni.log"}
 BACKUP = APP_DIR / "_versione_precedente"
 UA = {"User-Agent": "AppuntiLezioni", "Accept": "application/vnd.github+json"}
@@ -37,9 +38,19 @@ def versione_tupla(v):
     return tuple(int(x) for x in re.findall(r"\d+", v or "0")[:3]) or (0,)
 
 
+def _contesto_ssl():
+    # Il Python di python.org su Mac non usa i certificati di sistema: uso quelli di certifi.
+    import ssl
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
+
 def _get(url, timeout=20):
     req = urllib.request.Request(url, headers=UA)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout, context=_contesto_ssl()) as r:
         return r.read()
 
 
@@ -68,14 +79,11 @@ def _file_programma(cartella):
 
 
 def _python_programma():
-    exe = Path(sys.executable)
-    if exe.name.lower() == "pythonw.exe":
-        exe = exe.with_name("python.exe")
-    return str(exe)
+    return sys.executable
 
 
 def _nascosto():
-    return {"creationflags": 0x08000000} if sys.platform == "win32" else {}
+    return {}
 
 
 def installa(info, avanzamento=lambda msg: None):

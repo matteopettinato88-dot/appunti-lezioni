@@ -1,6 +1,7 @@
 """
-Prova automatica di Appunti Lezioni: usa una voce sintetica di Windows per verificare
-registrazione, trascrizione, salvataggio continuo, isolamento dell'audio, chiave API e appunti.
+Prova automatica di Appunti Lezioni: usa la voce sintetica del Mac (comando say) per verificare
+registrazione, trascrizione, salvataggio continuo, "solo la lezione", chiave API e appunti.
+Va avviata tramite l'app (open -W "Appunti Lezioni.app" --args --autotest), così vale il suo permesso.
 Il risultato finisce in autotest_risultato.txt nella cartella del programma.
 """
 
@@ -11,7 +12,6 @@ import platform
 import re
 import subprocess
 import tempfile
-import threading
 import time
 import traceback
 from pathlib import Path
@@ -26,25 +26,32 @@ TESTO_PROVA = (
     "la causa, l'oggetto e la forma, quando è prescritta dalla legge sotto pena di nullità. "
     "La prossima volta vedremo la differenza tra nullità e annullabilità."
 )
-TESTO_ISOLAMENTO = ("Questa frase non dovrebbe essere registrata, perché il programma silenzia tutto "
-                    "ciò che non è il browser. Continuo a parlare ancora per qualche secondo per la prova.")
+TESTO_ISOLAMENTO = ("Questa frase non dovrebbe essere registrata, perché il programma registra solo "
+                    "il browser. Continuo a parlare ancora per qualche secondo per la prova.")
 
-PS_PARLA = r"""
-Add-Type -AssemblyName System.Speech
-$s = New-Object System.Speech.Synthesis.SpeechSynthesizer
-$v = $s.GetInstalledVoices() | Where-Object { $_.VoiceInfo.Culture.Name -like 'it*' } | Select-Object -First 1
-if ($v) { $s.SelectVoice($v.VoiceInfo.Name) }
-$s.Volume = 100
-$s.Speak([IO.File]::ReadAllText($args[0], [Text.Encoding]::UTF8))
-"""
+
+def voce_italiana():
+    """Il nome di una voce italiana installata (es. Alice), o None per la voce predefinita."""
+    try:
+        r = subprocess.run(["/usr/bin/say", "-v", "?"], capture_output=True, text=True, timeout=30)
+        for riga in r.stdout.splitlines():
+            m = re.match(r"^(.+?)\s+(it_IT|it-IT)\b", riga)
+            if m:
+                return m.group(1).strip()
+    except Exception:
+        pass
+    return None
 
 
 def parla(testo, attesa=True):
     td = Path(tempfile.mkdtemp())
     (td / "t.txt").write_text(testo, encoding="utf-8")
-    (td / "p.ps1").write_text(PS_PARLA, encoding="utf-8-sig")
-    cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(td / "p.ps1"), str(td / "t.txt")]
-    p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=0x08000000)
+    cmd = ["/usr/bin/say"]
+    voce = voce_italiana()
+    if voce:
+        cmd += ["-v", voce]
+    cmd += ["-f", str(td / "t.txt")]
+    p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if attesa:
         p.wait(timeout=180)
     return p
@@ -66,7 +73,7 @@ def esegui():
     cfg = core.load_config()
 
     try:
-        import anthropic, customtkinter, docx, faster_whisper, pystray, pycaw, pyaudiowpatch  # noqa: F401
+        import anthropic, customtkinter, docx, faster_whisper  # noqa: F401
         ok("Librerie installate", True, f"faster-whisper {faster_whisper.__version__}, "
                                         f"customtkinter {customtkinter.__version__}")
     except Exception as e:
@@ -74,13 +81,19 @@ def esegui():
         return _riassunto(risultati)
 
     try:
-        import pyaudiowpatch as pyaudio
-        pa = pyaudio.PyAudio()
-        lb = core.trova_loopback(pa, pyaudio)
-        pa.terminate()
-        ok("Cattura dell'audio del PC", True, lb["name"])
+        import sistema
+        sistema.compila_helper()
+        ok("Programma di cattura audio", True, str(sistema.HELPER))
+        if not sistema.permesso_audio():
+            sistema.chiedi_permesso_audio()
+            ok("Permesso di registrare l'audio", False,
+               "manca: Impostazioni di Sistema → Privacy e sicurezza → Registrazione schermo e audio di "
+               "sistema → attiva «Appunti Lezioni», poi rilancia la prova")
+            return _riassunto(risultati)
+        ok("Permesso di registrare l'audio", True)
     except Exception as e:
-        ok("Cattura dell'audio del PC", False, repr(e))
+        log(traceback.format_exc())
+        ok("Cattura dell'audio del Mac", False, str(e))
         return _riassunto(risultati)
 
     try:
@@ -93,7 +106,8 @@ def esegui():
     # Registrazione + trascrizione + salvataggio continuo
     testo = ""
     try:
-        s = core.Sessione(dict(cfg, secondi_per_blocco=15), "Prova automatica", "Lezione di prova", tr,
+        s = core.Sessione(dict(cfg, secondi_per_blocco=15, solo_browser=False), "Prova automatica",
+                          "Lezione di prova", tr,
                           termini=["Codice civile", "nullità", "annullabilità"])
         s.registratore.avvia()
         log("Riproduco una voce di prova dalle casse…")
@@ -116,30 +130,24 @@ def esegui():
         log(traceback.format_exc())
         ok("Registrazione e trascrizione", False, repr(e))
 
-    # Isolamento: un programma che non è un browser (PowerShell) deve essere silenziato
+    # "Registra solo la lezione": la voce di say non è un browser, quindi non deve essere registrata
     try:
-        import sistema
-        reg = core.Registratore(cfg, lambda *a: None)
+        reg = core.Registratore(cfg, lambda *a: None, solo_lezione=True)
         reg.avvia()
-        iso = sistema.IsolamentoAudio()
-        iso.avvia()
         p = parla(TESTO_ISOLAMENTO, attesa=False)
         campioni, t0 = [], time.time()
         while p.poll() is None and time.time() - t0 < 60:
-            if time.time() - t0 > 4.5:      # dopo la prima scansione (ogni 3 s)
+            if time.time() - t0 > 1.0:
                 campioni.append(reg.livello_attuale())
             time.sleep(0.2)
-        silenziati = sorted(iso.silenziati)
-        iso.ferma()
         reg.ferma()
-        picco = max(campioni) if campioni else 1.0
-        ok("Solo audio del browser", picco < 0.003 and "powershell.exe" in silenziati,
-           f"livello di un programma non-browser durante la registrazione: {picco:.4f}; silenziati: {silenziati}")
-        ripristinati = not (core.DATI / "silenziati.json").exists()
-        ok("Audio degli altri programmi riattivato", ripristinati)
+        picco = max(campioni) if campioni else 0.0
+        ok("Solo audio di browser e videoconferenze", picco < 0.003,
+           f"livello di un programma che non è un browser: {picco:.4f}; app registrate: "
+           f"{reg.app_registrate or 'nessuna aperta'}")
     except Exception as e:
         log(traceback.format_exc())
-        ok("Solo audio del browser", False, repr(e))
+        ok("Solo audio di browser e videoconferenze", False, repr(e))
 
     # Chiave e appunti
     chiave = cfg.get("chiave_api_anthropic", "")

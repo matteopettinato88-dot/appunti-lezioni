@@ -298,7 +298,7 @@ def crea_appunti_lezione(cfg, corso, lezione_id):
 
 def importa_sessioni_interrotte(cfg):
     """
-    Le registrazioni rimaste in %APPDATA% (programma chiuso o PC spento durante la lezione)
+    Le registrazioni rimaste nella cartella dei dati (programma chiuso o Mac spento durante la lezione)
     diventano lezioni «da completare» nel loro corso. Restituisce quante ne ha importate.
     """
     n = 0
@@ -405,19 +405,6 @@ def titolo_capitolo(l):
 
 
 def esporta_pdf(docx_path):
-    """Esporta in PDF usando Microsoft Word (se installato). Restituisce il percorso del PDF."""
-    import comtypes
-    import comtypes.client
-
-    docx_path = Path(docx_path).resolve()
-    pdf = docx_path.with_suffix(".pdf")
-    comtypes.CoInitialize()
-    word = comtypes.client.CreateObject("Word.Application")
-    try:
-        word.Visible = False
-        doc = word.Documents.Open(str(docx_path), ReadOnly=True)
-        doc.ExportAsFixedFormat(str(pdf), 17)  # 17 = PDF
-        doc.Close(False)
-    finally:
-        word.Quit()
-    return pdf
+    """Esporta in PDF con Microsoft Word o Pages. Restituisce il percorso del PDF."""
+    import sistema
+    return sistema.esporta_pdf(docx_path)

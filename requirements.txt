@@ -1,14 +1,11 @@
 faster-whisper>=1.1
-PyAudioWPatch
 numpy
 customtkinter==5.2.2
-pystray
 Pillow
-pycaw
-comtypes
-psutil
 anthropic
 python-docx
 pypdf>=4
 python-pptx
 tkinterdnd2
+pyobjc-framework-Cocoa
+certifi

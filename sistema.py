@@ -1,247 +1,248 @@
 """
-Appunti Lezioni – funzioni legate a Windows: avvio automatico, collegamenti,
-isolamento dell'audio del browser, istanza unica, apertura file.
-Su altri sistemi le funzioni non fanno nulla (utile per i test).
+Appunti Lezioni – funzioni legate a macOS: app in ~/Applications, apertura all'accesso, programma di
+cattura audio (ScreenCaptureKit), permessi, notifiche, PDF, istanza unica, apertura file.
+
+Questa versione funziona solo su macOS. L'errore all'importazione su altri sistemi fa fallire la
+verifica degli aggiornamenti su un vecchio PC Windows, che resta così alla versione 3.x.
+(Per provare il codice su Linux: APPUNTI_TEST=1.)
 """
 
-import json
+import hashlib
 import os
+import plistlib
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
 
-from core import APP_DIR, APP_NOME, DATI, log
+if sys.platform != "darwin" and not os.environ.get("APPUNTI_TEST"):
+    raise ImportError("Questa versione di Appunti Lezioni funziona solo su macOS.")
 
-WIN = sys.platform == "win32"
-BROWSER = {"chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe", "opera_gx.exe",
-           "vivaldi.exe", "arc.exe", "iexplore.exe", "msedgewebview2.exe",
-           # programmi per lezioni in diretta: non vanno mai silenziati
-           "zoom.exe", "zoom_vdi.exe", "ms-teams.exe", "teams.exe", "msteams.exe", "webex.exe",
-           "ciscocollabhost.exe", "atmgr.exe", "webexmta.exe", "skype.exe", "gotomeeting.exe",
-           "g2mcomm.exe", "bbbclient.exe", "meet.exe"}
+from core import APP_DIR, APP_NOME, APP_VERSIONE, log
+
 PORTA_ISTANZA = 47651
+BUNDLE_ID = "it.appuntilezioni.app"
+APP_BUNDLE = Path(os.environ.get("APPUNTI_APP") or Path.home() / "Applications" / f"{APP_NOME}.app")
+BIN = APP_DIR / "bin"
+HELPER = BIN / "cattura-audio"
+SORGENTE_HELPER = APP_DIR / "cattura_audio.swift"
+SORGENTE_APP = APP_DIR / "avvio_app.swift"
+LAUNCH_AGENT = Path.home() / "Library" / "LaunchAgents" / "it.appuntilezioni.avvio.plist"
+PANNELLO_PERMESSO = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+MSG_STRUMENTI = ("Mancano gli Strumenti da riga di comando di Xcode (servono a preparare il programma). "
+                 "Apri il Terminale, scrivi:  xcode-select --install  e premi Invio, poi riapri il programma.")
 
 
 def apri(path):
-    path = str(path)
-    if WIN:
-        os.startfile(path)
-    elif sys.platform == "darwin":
-        subprocess.Popen(["open", path])
-    else:
-        subprocess.Popen(["xdg-open", path])
+    subprocess.Popen(["/usr/bin/open", str(path)])
 
 
 def comando_avvio(nascosto=False):
-    pyw = Path(sys.executable)
-    if WIN and pyw.name.lower() == "python.exe":
-        pyw = pyw.with_name("pythonw.exe")
-    args = [str(pyw), str(APP_DIR / "app.py")]
-    if nascosto:
-        args.append("--nascosto")
-    return args
+    """Comando per (ri)avviare il programma: tramite l'app, così macOS mantiene i permessi."""
+    extra = ["--nascosto"] if nascosto else []
+    if APP_BUNDLE.exists():
+        return ["/usr/bin/open", "-n", str(APP_BUNDLE), "--args"] + extra
+    return [sys.executable, str(APP_DIR / "app.py")] + extra
+
+
+def notifica(titolo, testo):
+    def q(t):
+        return '"' + str(t).replace("\\", "\\\\").replace('"', '\\"') + '"'
+    try:
+        subprocess.Popen(["/usr/bin/osascript", "-e", f"display notification {q(testo)} with title {q(titolo)}"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
 
 
 # ----------------------------------------------------------------------------
-# Avvio con Windows
+# Compilazione dei programmi Swift (cattura audio e app)
 # ----------------------------------------------------------------------------
 
-_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+def _impronta(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
+
+def _swiftc(sorgente, destinazione):
+    if not Path("/usr/bin/xcrun").exists() or subprocess.run(
+            ["/usr/bin/xcode-select", "-p"], capture_output=True).returncode != 0:
+        raise RuntimeError(MSG_STRUMENTI)
+    destinazione.parent.mkdir(parents=True, exist_ok=True)
+    tmp = destinazione.with_name(destinazione.name + ".nuovo")
+    r = subprocess.run(["/usr/bin/xcrun", "swiftc", "-O", str(sorgente), "-o", str(tmp)],
+                       capture_output=True, text=True, timeout=600)
+    if r.returncode != 0:
+        log(f"Compilazione di {sorgente.name} fallita:\n{r.stdout}\n{r.stderr}")
+        raise RuntimeError(f"Non riesco a preparare {sorgente.name}: dettagli nel registro.\n"
+                           + (r.stderr.strip().splitlines() or [""])[-1])
+    os.replace(tmp, destinazione)
+
+
+def compila_helper(forza=False):
+    """Compila cattura-audio se manca o se il sorgente è cambiato (es. dopo un aggiornamento)."""
+    impronta = BIN / "cattura-audio.sha256"
+    attuale = _impronta(SORGENTE_HELPER)
+    if not forza and HELPER.exists() and impronta.exists() and impronta.read_text().strip() == attuale:
+        return False
+    log("Preparo il programma di cattura audio…")
+    _swiftc(SORGENTE_HELPER, HELPER)
+    impronta.write_text(attuale)
+    log("Programma di cattura audio pronto.")
+    return True
+
+
+def helper_audio():
+    compila_helper()
+    return HELPER
+
+
+def permesso_audio():
+    """True se macOS permette di registrare l'audio (Registrazione schermo e audio di sistema)."""
+    try:
+        return subprocess.run([str(helper_audio()), "--verifica"], capture_output=True, timeout=30).returncode == 0
+    except Exception as e:
+        log(f"Verifica del permesso non riuscita: {e}")
+        return False
+
+
+def chiedi_permesso_audio():
+    """Mostra la richiesta di macOS (compare solo la prima volta) e apre le Impostazioni giuste."""
+    try:
+        subprocess.run([str(helper_audio()), "--chiedi"], capture_output=True, timeout=60)
+    except Exception:
+        pass
+
+
+def apri_impostazioni_permesso():
+    subprocess.Popen(["/usr/bin/open", PANNELLO_PERMESSO])
+
+
+def assicura_permesso_audio():
+    import core
+    if not permesso_audio():
+        chiedi_permesso_audio()
+        raise core.PermessoMancante(core.MSG_PERMESSO)
+
+
+# ----------------------------------------------------------------------------
+# L'app "Appunti Lezioni" in ~/Applications (Launchpad, Spotlight, Dock)
+# ----------------------------------------------------------------------------
+
+def crea_app(icona_png, destinazione=None):
+    """Crea (o aggiorna) Appunti Lezioni.app. Restituisce il percorso."""
+    from PIL import Image
+
+    app = Path(destinazione) if destinazione else Path.home() / "Applications" / f"{APP_NOME}.app"
+    tmp = Path(tempfile.mkdtemp(prefix="app_")) / app.name
+    macos = tmp / "Contents" / "MacOS"
+    risorse = tmp / "Contents" / "Resources"
+    macos.mkdir(parents=True)
+    risorse.mkdir(parents=True)
+    _swiftc(SORGENTE_APP, macos / APP_NOME)
+    Image.open(icona_png).convert("RGBA").resize((1024, 1024)).save(risorse / "icona.icns")
+    info = {
+        "CFBundleName": APP_NOME,
+        "CFBundleDisplayName": APP_NOME,
+        "CFBundleIdentifier": BUNDLE_ID,
+        "CFBundleExecutable": APP_NOME,
+        "CFBundleIconFile": "icona",
+        "CFBundlePackageType": "APPL",
+        "CFBundleShortVersionString": APP_VERSIONE,
+        "CFBundleVersion": APP_VERSIONE,
+        "LSMinimumSystemVersion": "13.0",
+        "LSUIElement": True,
+        "NSHighResolutionCapable": True,
+        "AppuntiProgramma": str(APP_DIR),
+        "NSAppleEventsUsageDescription": "Serve per esportare la dispensa in PDF con Word o Pages.",
+        "NSDocumentsFolderUsageDescription": "Gli appunti vengono salvati nella cartella Documenti.",
+        "NSDesktopFolderUsageDescription": "Per allegare alle lezioni materiali che si trovano sulla Scrivania.",
+        "NSDownloadsFolderUsageDescription": "Per allegare alle lezioni materiali scaricati.",
+        "NSAudioCaptureUsageDescription": "Per trascrivere l'audio delle videolezioni.",
+        "NSScreenCaptureUsageDescription": "Per registrare l'audio delle videolezioni (lo schermo non viene registrato).",
+    }
+    with open(tmp / "Contents" / "Info.plist", "wb") as f:
+        plistlib.dump(info, f)
+    subprocess.run(["/usr/bin/codesign", "--force", "--deep", "--sign", "-", str(tmp)],
+                   capture_output=True, text=True)
+    app.parent.mkdir(parents=True, exist_ok=True)
+    if app.exists():
+        shutil.rmtree(app)
+    shutil.move(str(tmp), str(app))
+    shutil.rmtree(tmp.parent, ignore_errors=True)
+    subprocess.run(["/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework"
+                    "/Support/lsregister", "-f", str(app)], capture_output=True)
+    log(f"App creata: {app}")
+    return app
+
+
+# ----------------------------------------------------------------------------
+# Apertura all'accesso al Mac
+# ----------------------------------------------------------------------------
 
 def avvio_automatico_attivo():
-    if not WIN:
-        return False
-    import winreg
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY) as k:
-            winreg.QueryValueEx(k, "AppuntiLezioni")
-            return True
-    except OSError:
-        return False
+    return LAUNCH_AGENT.exists()
 
 
 def imposta_avvio_automatico(attivo):
-    if not WIN:
-        return
-    import winreg
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
-        if attivo:
-            cmd = " ".join(f'"{a}"' if not a.startswith("--") else a for a in comando_avvio(nascosto=True))
-            winreg.SetValueEx(k, "AppuntiLezioni", 0, winreg.REG_SZ, cmd)
-        else:
-            try:
-                winreg.DeleteValue(k, "AppuntiLezioni")
-            except OSError:
-                pass
-    log(f"Avvio con Windows: {'attivo' if attivo else 'disattivato'}")
-
-
-# ----------------------------------------------------------------------------
-# Collegamenti su Desktop e menu Start
-# ----------------------------------------------------------------------------
-
-def crea_collegamenti(icona):
-    if not WIN:
-        return []
-    exe, script = comando_avvio()[:2]
-    desktop = Path(os.environ["USERPROFILE"]) / "Desktop"
-    try:
-        import ctypes
-        buf = ctypes.create_unicode_buffer(1024)
-        if ctypes.windll.shell32.SHGetFolderPathW(None, 0x10, None, 0, buf) == 0 and buf.value:
-            desktop = Path(buf.value)  # Desktop reale (anche se spostato su OneDrive)
-    except Exception:
-        pass
-    start = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
-    creati = []
-    for cartella in (desktop, start):
-        lnk = cartella / f"{APP_NOME}.lnk"
-        ps = (
-            "$s=(New-Object -ComObject WScript.Shell).CreateShortcut($env:LNK);"
-            "$s.TargetPath=$env:EXE;$s.Arguments='\"'+$env:SCRIPT+'\"';"
-            "$s.WorkingDirectory=$env:WD;$s.IconLocation=$env:ICO;"
-            "$s.Description='Trascrive le videolezioni e crea gli appunti';$s.Save()"
-        )
-        env = dict(os.environ, LNK=str(lnk), EXE=exe, SCRIPT=script, WD=str(APP_DIR), ICO=str(icona))
-        r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
-                           env=env, capture_output=True, text=True, creationflags=0x08000000)
-        if r.returncode == 0:
-            creati.append(lnk)
-        else:
-            log(f"Collegamento non creato in {cartella}: {r.stderr.strip()}")
-    return creati
-
-
-# ----------------------------------------------------------------------------
-# Solo audio del browser: silenzia temporaneamente gli altri programmi
-# ----------------------------------------------------------------------------
-
-_SILENZIATI_FILE = DATI / "silenziati.json"
-
-
-class IsolamentoAudio:
-    """
-    Durante la registrazione silenzia i programmi che non sono browser (Spotify, WhatsApp,
-    suoni di sistema…) così nella trascrizione finisce solo la lezione. Alla fine li riattiva.
-    I programmi silenziati vengono annotati su disco: se il PC si spegne, al riavvio
-    dell'app vengono riattivati (ripristina_sospesi).
-    """
-
-    def __init__(self):
-        self.silenziati = set()      # nomi dei processi (o "suoni di sistema")
-        self.attivo = False
-        self._stop = threading.Event()
-        self._thread = None
-
-    @staticmethod
-    def _sessioni():
-        from pycaw.pycaw import AudioUtilities
-        return AudioUtilities.GetAllSessions()
-
-    @staticmethod
-    def _nome(sessione):
+    if attivo:
+        LAUNCH_AGENT.parent.mkdir(parents=True, exist_ok=True)
+        with open(LAUNCH_AGENT, "wb") as f:
+            plistlib.dump({"Label": "it.appuntilezioni.avvio",
+                           "ProgramArguments": ["/usr/bin/open", "-g", str(APP_BUNDLE), "--args", "--nascosto"],
+                           "RunAtLoad": True}, f)
+    else:
         try:
-            if sessione.Process is None:
-                return "suoni di sistema"
-            return sessione.Process.name().lower()
-        except Exception:
-            return None
-
-    def _passata(self):
-        mio = os.getpid()
-        for s in self._sessioni():
-            nome = self._nome(s)
-            if not nome or nome in BROWSER:
-                continue
-            try:
-                if s.Process is not None and s.Process.pid == mio:
-                    continue
-                vol = s.SimpleAudioVolume
-                if not vol.GetMute():
-                    vol.SetMute(1, None)
-                    if nome not in self.silenziati:
-                        log(f"Silenziato durante la registrazione: {nome}")
-                    self.silenziati.add(nome)
-            except Exception:
-                pass
-        self._salva()
-
-    def _salva(self):
-        try:
-            _SILENZIATI_FILE.write_text(json.dumps(sorted(self.silenziati)), encoding="utf-8")
+            LAUNCH_AGENT.unlink()
         except OSError:
             pass
+    log(f"Apertura all'accesso: {'attiva' if attivo else 'disattivata'}")
 
-    def avvia(self):
-        if not WIN:
-            return
+
+# ----------------------------------------------------------------------------
+# PDF della dispensa (con Microsoft Word se c'è, altrimenti con Pages)
+# ----------------------------------------------------------------------------
+
+def _as(t):
+    return '"' + str(t).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def esporta_pdf(docx_path):
+    docx_path = Path(docx_path).resolve()
+    pdf = docx_path.with_suffix(".pdf")
+    script_word = f"""
+tell application "Microsoft Word"
+    open POSIX file {_as(docx_path)}
+    set d to active document
+    save as d file name {_as(pdf)} file format format PDF
+    close d saving no
+end tell"""
+    script_pages = f"""
+tell application "Pages"
+    set d to open POSIX file {_as(docx_path)}
+    export d to POSIX file {_as(pdf)} as PDF
+    close d saving no
+end tell"""
+    tentativi = []
+    if Path("/Applications/Microsoft Word.app").exists():
+        tentativi.append(("Word", script_word))
+    if Path("/Applications/Pages.app").exists():
+        tentativi.append(("Pages", script_pages))
+    if not tentativi:
+        raise RuntimeError("Per creare il PDF serve Pages (gratuito sull'App Store) o Microsoft Word.")
+    errori = []
+    for nome, script in tentativi:
         try:
-            import comtypes
-            comtypes.CoInitialize()
-            self._passata()
-        except Exception as e:
-            log(f"Isolamento audio non disponibile: {e}")
-            return
-        self.attivo = True
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._ciclo, daemon=True)
-        self._thread.start()
-
-    def _ciclo(self):
-        import comtypes
-        comtypes.CoInitialize()
-        while not self._stop.wait(3):  # i programmi aperti dopo vengono silenziati anch'essi
-            try:
-                self._passata()
-            except Exception:
-                pass
-
-    def ferma(self):
-        if not self.attivo:
-            return
-        self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=5)
-        riattiva(self.silenziati)
-        self.silenziati.clear()
-        self.attivo = False
-
-
-def riattiva(nomi):
-    if not WIN or not nomi:
-        try:
-            _SILENZIATI_FILE.unlink()
+            pdf.unlink()
         except OSError:
             pass
-        return
-    try:
-        import comtypes
-        comtypes.CoInitialize()
-        for s in IsolamentoAudio._sessioni():
-            if IsolamentoAudio._nome(s) in nomi:
-                try:
-                    s.SimpleAudioVolume.SetMute(0, None)
-                except Exception:
-                    pass
-        log(f"Riattivato l'audio di: {', '.join(sorted(nomi))}")
-    except Exception as e:
-        log(f"Impossibile riattivare l'audio: {e}")
-    try:
-        _SILENZIATI_FILE.unlink()
-    except OSError:
-        pass
-
-
-def ripristina_sospesi():
-    """Se l'app si era chiusa male durante una registrazione, riattiva i programmi rimasti muti."""
-    if _SILENZIATI_FILE.exists():
-        try:
-            riattiva(set(json.loads(_SILENZIATI_FILE.read_text(encoding="utf-8"))))
-        except Exception:
-            pass
+        r = subprocess.run(["/usr/bin/osascript", "-e", script], capture_output=True, text=True, timeout=300)
+        if r.returncode == 0 and pdf.exists():
+            return pdf
+        errori.append(f"{nome}: {r.stderr.strip()}")
+    raise RuntimeError("PDF non creato. " + " | ".join(errori))
 
 
 # ----------------------------------------------------------------------------

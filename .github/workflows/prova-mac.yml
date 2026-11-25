@@ -1,0 +1,78 @@
+# Prova su un Mac di GitHub: installazione completa con installa.sh, compilazione dei programmi Swift,
+# trascrizione di una frase detta dalla voce del Mac, avvio dell'interfaccia.
+# I risultati compaiono come annotazioni (notice/error) nella pagina dell'esecuzione.
+name: Prova su Mac
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, mac]
+    paths-ignore: ["README.md", "versione.json"]
+
+jobs:
+  mac:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installazione con installa.sh
+        run: |
+          SORGENTE=. bash installa.sh < /dev/null 2>&1 | tee installa.out
+          echo "::notice title=Fine installazione::$(tail -n 25 installa.out | tr '\n' '|' | sed 's/\x1b\[[0-9;]*m//g')"
+          LOG="$HOME/Library/Application Support/AppuntiLezioni/installazione.log"
+          grep -q "ERRORE" "$LOG" && echo "::error title=Log installazione::$(tail -n 40 "$LOG" | tr '\n' '|')" || true
+          test -x "$HOME/Library/Application Support/AppuntiLezioni/programma/bin/cattura-audio"
+          test -x "$HOME/Applications/Appunti Lezioni.app/Contents/MacOS/Appunti Lezioni"
+
+      - name: Risultato della prova automatica
+        if: always()
+        run: |
+          R="$HOME/Library/Application Support/AppuntiLezioni/programma/autotest_risultato.txt"
+          if [ -f "$R" ]; then echo "::notice title=Autotest::$(tr '\n' '|' < "$R")"; else echo "::error title=Autotest::nessun risultato"; fi
+          L="$HOME/Library/Application Support/AppuntiLezioni/appunti_lezioni.log"
+          [ -f "$L" ] && echo "::notice title=Registro programma::$(tail -n 30 "$L" | tr '\n' '|')" || true
+
+      - name: Cattura audio diretta (se il runner ha il permesso)
+        if: always()
+        run: |
+          H="$HOME/Library/Application Support/AppuntiLezioni/programma/bin/cattura-audio"
+          "$H" --verifica; echo "::notice title=Permesso registrazione nel runner::codice $?"
+          ( "$H" > /tmp/audio.raw 2> /tmp/audio.err & echo $! > /tmp/pid ); sleep 4
+          say "Prova della cattura audio del Mac, uno due tre" ; sleep 1; kill "$(cat /tmp/pid)" || true; sleep 1
+          echo "::notice title=Cattura audio diretta::byte $(wc -c < /tmp/audio.raw) | $(tr '\n' '|' < /tmp/audio.err)"
+
+      - name: Trascrizione di una frase detta dal Mac
+        if: always()
+        run: |
+          P="$HOME/Library/Application Support/AppuntiLezioni/programma"
+          say -v Alice -o /tmp/frase.aiff "Il contratto è l'accordo di due o più parti per costituire un rapporto giuridico patrimoniale." || say -o /tmp/frase.aiff "Il contratto è l'accordo di due o più parti."
+          cd "$P" && .venv/bin/python -c "
+          import time, core
+          t=time.time(); tr=core.Trascrittore('veloce'); print('modello', round(time.time()-t))
+          t=time.time(); x=tr.trascrivi('/tmp/frase.aiff'); print('TESTO:', x, round(time.time()-t,1))
+          " 2>&1 | tee /tmp/trascr.out
+          echo "::notice title=Trascrizione::$(tr '\n' '|' < /tmp/trascr.out | tail -c 900)"
+
+      - name: Avvio dell'interfaccia
+        if: always()
+        run: |
+          P="$HOME/Library/Application Support/AppuntiLezioni/programma"
+          cd "$P" && ( timeout 90 .venv/bin/python -c "
+          import app, core
+          app.nome_nel_menu()
+          a = app.App()
+          def fine():
+              print('INTERFACCIA OK', a.stato, a.dettaglio); a.root.destroy()
+          a.root.after(20000, fine)
+          a.run()
+          " > /tmp/gui.out 2>&1; echo "uscita $?" >> /tmp/gui.out )
+          echo "::notice title=Interfaccia::$(tr '\n' '|' < /tmp/gui.out | tail -c 1500)"
+          screencapture -x /tmp/schermo.png || true
+
+      - name: Avvio tramite l'app
+        if: always()
+        run: |
+          open "$HOME/Applications/Appunti Lezioni.app"; sleep 15
+          echo "::notice title=Processi::$(ps ax | grep -E 'Appunti|app.py' | grep -v grep | tr '\n' '|')"
+          L="$HOME/Library/Application Support/AppuntiLezioni/appunti_lezioni.log"
+          echo "::notice title=Registro dopo avvio app::$(tail -n 15 "$L" | tr '\n' '|')"

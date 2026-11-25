@@ -5,7 +5,6 @@ Estrae il testo, i termini chiave per Whisper e prepara i blocchi da inviare a C
 
 import base64
 import io
-import os
 import re
 import time
 from collections import Counter
@@ -244,25 +243,6 @@ def blocchi_claude(materiali):
 # ----------------------------------------------------------------------------
 
 def cartella_download():
-    if os.name == "nt":
-        try:
-            import ctypes
-            from ctypes import wintypes
-            from uuid import UUID
-
-            class GUID(ctypes.Structure):
-                _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD),
-                            ("Data3", wintypes.WORD), ("Data4", wintypes.BYTE * 8)]
-
-            u = UUID("{374DE290-123F-4565-9164-39C4925E467B}")  # FOLDERID_Downloads
-            g = GUID(u.fields[0], u.fields[1], u.fields[2], (wintypes.BYTE * 8).from_buffer_copy(u.bytes[8:]))
-            p = ctypes.c_wchar_p()
-            if ctypes.windll.shell32.SHGetKnownFolderPath(ctypes.byref(g), 0, None, ctypes.byref(p)) == 0:
-                percorso = Path(p.value)
-                ctypes.windll.ole32.CoTaskMemFree(p)
-                return percorso
-        except Exception:
-            pass
     return Path.home() / "Downloads"
 
 
