@@ -45,9 +45,9 @@ jobs:
         if: always()
         run: |
           P="$HOME/Library/Application Support/AppuntiLezioni/programma"
-          cd "$P" && .venv/bin/python app.py --autotest > /tmp/autotest.out 2>&1; echo "uscita $?"
+          cd "$P" && { .venv/bin/python app.py --autotest > /tmp/autotest.out 2>&1 || true; }
           echo "::notice title=Autotest dal Terminale::$(tr '\n' '|' < autotest_risultato.txt)"
-          echo "::notice title=Dettagli autotest::$(grep -E 'Trascrizione|Blocco|Registro|APP|FORMATO' /tmp/autotest.out | tr '\n' '|' | tail -c 2500)"
+          echo "::notice title=Dettagli autotest::$(grep -E 'Trascrizione|Blocco|Registro|APP|FORMATO' /tmp/autotest.out | tr '\n' '|' | tail -c 2500 || true)"
 
       - name: Trascrizione di una frase detta dal Mac
         if: always()
