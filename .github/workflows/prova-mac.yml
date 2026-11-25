@@ -41,6 +41,14 @@ jobs:
           say "Prova della cattura audio del Mac, uno due tre" ; sleep 1; kill "$(cat /tmp/pid)" || true; sleep 1
           echo "::notice title=Cattura audio diretta::byte $(wc -c < /tmp/audio.raw) | $(tr '\n' '|' < /tmp/audio.err)"
 
+      - name: Prova automatica completa dal Terminale (il runner dà il permesso a bash)
+        if: always()
+        run: |
+          P="$HOME/Library/Application Support/AppuntiLezioni/programma"
+          cd "$P" && .venv/bin/python app.py --autotest > /tmp/autotest.out 2>&1; echo "uscita $?"
+          echo "::notice title=Autotest dal Terminale::$(tr '\n' '|' < autotest_risultato.txt)"
+          echo "::notice title=Dettagli autotest::$(grep -E 'Trascrizione|Blocco|Registro|APP|FORMATO' /tmp/autotest.out | tr '\n' '|' | tail -c 2500)"
+
       - name: Trascrizione di una frase detta dal Mac
         if: always()
         run: |
@@ -57,7 +65,7 @@ jobs:
         if: always()
         run: |
           P="$HOME/Library/Application Support/AppuntiLezioni/programma"
-          cd "$P" && ( timeout 90 .venv/bin/python -c "
+          cd "$P" && ( perl -e 'alarm 90; exec @ARGV' .venv/bin/python -c "
           import app, core
           app.nome_nel_menu()
           a = app.App()

@@ -633,14 +633,19 @@ class App:
         except Exception:
             pass
 
-        self.root = ctk.CTk()
         self.dnd = False
         try:
             from tkinterdnd2 import TkinterDnD
+
+            class Radice(ctk.CTk, TkinterDnD.DnDWrapper):   # finestra principale che accetta file trascinati
+                pass
+            self.root = Radice()
             TkinterDnD._require(self.root)
             self.dnd = True
         except Exception as e:
             log(f"Trascinamento file non disponibile: {e}")
+            if not hasattr(self, "root"):
+                self.root = ctk.CTk()
         self.root.title(core.APP_NOME)
         self.root.geometry("680x880")
         self.root.minsize(580, 700)
